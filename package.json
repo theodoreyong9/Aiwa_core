@@ -1,0 +1,31 @@
+{
+  "name": "aiwa-core",
+  "version": "0.1.0",
+  "description": "Validation: progression, VDF, reward, accrual, conservation, wallet, causal-tick, relative-rate, mirror, contracts. Pure — no transport, no storage. Builds on @aiwa/record's event/identity substrate.",
+  "type": "module",
+  "license": "MIT",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@aiwa/record": "github:theodoreyong9/record",
+    "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
+    "@scure/bip39": "^2.3.0"
+  },
+  "peerDependencies": {
+    "@solana/web3.js": "^1.98.0"
+  },
+  "peerDependenciesMeta": {
+    "@solana/web3.js": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@solana/web3.js": "^1.98.0"
+  }
+}
