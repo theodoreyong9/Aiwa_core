@@ -63,7 +63,6 @@ export function createIndexedDbBackend(dbName = 'aiwa-core-event-log') {
 export class EventLog {
   constructor(backend = createMemoryBackend()) {
     this.backend = backend;
-    this._childCount = new Map(); // real, in-memory index: id -> how many real, known events name it as a parent
   }
 
   async append(event) {
@@ -78,8 +77,6 @@ export class EventLog {
       if (!(await this.backend.hasEvent(p))) throw new Error(`Cannot append: real parent ${p} is not yet known — request it first.`);
     }
     await this.backend.putEvent(event);
-    for (const p of event.parents) this._childCount.set(p, (this._childCount.get(p) ?? 0) + 1);
-    if (!this._childCount.has(event.id)) this._childCount.set(event.id, 0);
   }
 
   async appendMany(events) {
@@ -112,10 +109,24 @@ export class EventLog {
     return Promise.all(event.parents.map((p) => this.get(p)));
   }
 
-  /** The real, current heads — every real, known event that is not yet a real parent of any other real, known event. */
+  /**
+   * The real, current heads — every real, known event that is not yet
+   * a real parent of any other real, known event. Computed fresh from
+   * the backend every call, deliberately never cached across calls or
+   * instances: a real, persisted backend (IndexedDB) outlives any one
+   * in-memory EventLog instance — a page reload, a service worker
+   * restart, or a new process all construct a fresh EventLog over the
+   * same real backend, so any cache not itself rebuilt from the
+   * backend would silently go stale the instant that happens.
+   */
   async head() {
     const ids = await this.backend.allIds();
-    return ids.filter((id) => (this._childCount.get(id) ?? 0) === 0);
+    const childCount = new Map();
+    for (const id of ids) {
+      const event = await this.backend.getEvent(id);
+      for (const p of event.parents) childCount.set(p, (childCount.get(p) ?? 0) + 1);
+    }
+    return ids.filter((id) => (childCount.get(id) ?? 0) === 0);
   }
 
   /** Real, new events not reachable as a real ancestor of `knownIds` — the real, minimal set a peer announcing `knownIds` as their own heads is genuinely missing. */

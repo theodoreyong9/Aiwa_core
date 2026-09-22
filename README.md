@@ -113,6 +113,25 @@ then reload the same URL with `?phase=reload`.
 Real, confirmed result: both events survived the reload, byte-for-byte,
 recovered purely from real IndexedDB storage — not a copied assumption.
 
+## A real bug `head()` had, found via `aiwa-platform`'s own real testing
+
+`EventLog.head()` used to maintain its child-count index as a plain
+in-memory `Map`, updated incrementally as `append()` was called. That
+map lived on the `EventLog` instance, not the backend — so a **fresh**
+`EventLog` constructed over an already-populated, real, persisted
+backend (exactly what a page reload, a service worker restart, or a
+new process does against real IndexedDB) started with an *empty* index
+and silently reported every known event as a head, not just the true
+ones. Found while building a service worker in `aiwa-platform` that
+constructs a new `EventLog` on every real restart and calls `head()`-
+dependent `latestBundle()` — where it manifested concretely as a false
+"real fork" error after a restart, on any domain with more than one
+published version. Fixed: `head()` now recomputes the child-count index
+from the backend on every call, not from any instance-level cache —
+`event-log.test.mjs` has a dedicated regression test constructing a
+second `EventLog` over the same backend and asserting `head()` stays
+correct.
+
 ## Honest limits
 
 - `rust-interop.test.mjs` (cross-runtime bit-for-bit verification of
@@ -133,7 +152,7 @@ recovered purely from real IndexedDB storage — not a copied assumption.
 
 ## Status
 
-314 passing `node --test` cases. Self-contained — the only external
+326 passing `node --test` cases. Self-contained — the only external
 dependencies are `@noble/curves`, `@noble/hashes`, `@scure/bip39`, and
 an optional `@solana/web3.js` peer dependency.
 
