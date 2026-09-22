@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { computeVdfChain, vdfSeed } from '../src/vdf.js';
-import { deriveId } from '@aiwa/record';
+import { deriveId } from '../src/identity.js';
 import { claimableNow } from '../src/accrual.js';
 import {
   initialWalletState, applyWalletEvent, materializeWallet,

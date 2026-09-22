@@ -1,7 +1,14 @@
-// aiwa-core: validation. Commitment, state, epoch, transition, VDF,
-// proof, verification, progression — pure, no transport, no storage,
-// no GUN, no GitHub, no YourMine, no Jobber. Builds on @aiwa/record's
-// event/identity substrate; never reimplements it.
+// aiwa-core: commitment, state, epoch, transition, VDF, proof,
+// verification, progression — pure, no transport, no GUN, no GitHub,
+// no YourMine, no Jobber. Owns the event/identity/storage substrate
+// (identity.js/event.js/event-log.js/materializer.js/data-store.js)
+// that aiwa-platform and everything above it build on.
+
+export { generateIdentity, identityFromSecretKey, publicIdentity, deriveId, Identity } from './identity.js';
+export { createEvent, verifyEvent, computeEventId } from './event.js';
+export { EventLog, createMemoryBackend, createIndexedDbBackend } from './event-log.js';
+export { defaultKvMaterializer } from './materializer.js';
+export { DataStore } from './data-store.js';
 
 export { toReducerEvent, toReducerEvents } from './adapt-event.js';
 
@@ -19,7 +26,7 @@ export {
   deriveKeypairFromBip39Mnemonic, validateBip39Mnemonic, generateKeypair, keypairFromSecretKey,
   encryptSecretKey, decryptSecretKey, buildBurnTransaction, buildTransferTransaction,
   signAndSerialize, broadcastBurnTransaction, broadcastTransferTransaction, loadSolanaWeb3,
-  toRecordIdentity,
+  toIdentity,
 } from './solana-wallet.js';
 
 export {

@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { EventLog, generateIdentity, createEvent } from '@aiwa/record';
+import { EventLog } from '../src/event-log.js';
+import { generateIdentity } from '../src/identity.js';
+import { createEvent } from '../src/event.js';
 import { computeContractHash, publishContractSpec, verifyContractSource, readContractSource, registerVerifiedContract, scanContractSpecs } from '../src/contract-registry.js';
 import { toReducerEvent } from '../src/adapt-event.js';
 

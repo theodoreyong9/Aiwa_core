@@ -6,7 +6,7 @@ import { issueClaim } from '../src/conservation.js';
 import { initialWalletState, applyWalletEvent } from '../src/wallet.js';
 import { buildGenerousSendCommitment, verifyPayout, CONTRACT_ID } from '../src/generous-transfer.js';
 import { toUnits } from '../src/units.js';
-import { deriveId } from '@aiwa/record';
+import { deriveId } from '../src/identity.js';
 
 const REWARD_PARAMS = { alpha: 1.1, beta: 2.2, gamma: 3, C: Math.pow(33, 3), minQ: 1 };
 const VDF_ITERATIONS = 30;

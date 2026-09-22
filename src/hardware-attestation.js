@@ -49,7 +49,7 @@ export async function bindHardwareRoot(hardwareRootSecretKey, hardwareRootPubkey
 
 export async function verifyHardwareAttestation(attestation, expectedDomain) {
   const { ed25519 } = await import('@noble/curves/ed25519.js');
-  const { deriveId } = await import('@aiwa/record');
+  const { deriveId } = await import('./identity.js');
   const { issuance, binding } = attestation ?? {};
   if (!issuance || !binding) return false;
   if (binding.boundDomain !== expectedDomain) return false;

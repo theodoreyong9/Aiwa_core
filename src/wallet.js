@@ -8,7 +8,7 @@
 
 import { applyAccrualEvent, initialAccrualState, claimableNow } from './accrual.js';
 import { initialConservationState, issueClaim, transfer, splitClaim, identityDerivation } from './conservation.js';
-import { deriveId } from '@aiwa/record';
+import { deriveId } from './identity.js';
 import { toUnits } from './units.js';
 
 const derivations = { identity: identityDerivation };

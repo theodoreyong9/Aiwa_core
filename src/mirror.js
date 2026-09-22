@@ -43,7 +43,7 @@ export async function buildReceptionCommitment(keypair, domain, epoch, sourceDom
 
 async function verifyCommitmentSignature(payload) {
   const { ed25519 } = await import('@noble/curves/ed25519.js');
-  const { deriveId } = await import('@aiwa/record');
+  const { deriveId } = await import('./identity.js');
   const fromHex = (hex) => {
     const bytes = new Uint8Array(hex.length / 2);
     for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);

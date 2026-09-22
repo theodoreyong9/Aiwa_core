@@ -1,7 +1,7 @@
 // A real, general mechanism — not specific to any one contract — for
 // publishing a contract's own real identity as an ordinary event in
 // the same log everything else already lives in. No new
-// infrastructure: @aiwa/record's own content-addressing (its own
+// infrastructure: event.js's own content-addressing (its own
 // computeEventId) is the entire mechanism. Once published and
 // received by other domains (via replication, like any other real
 // event), a contract's own id is immutable in the identical, real
@@ -15,7 +15,7 @@
 // identity — wallets and users choose which to trust, exactly like
 // there is no single "true" token contract on any existing chain.
 
-import { createEvent } from '@aiwa/record';
+import { createEvent } from './event.js';
 
 function toHex(bytes) {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -28,10 +28,10 @@ export async function computeContractHash(sourceCode) {
 }
 
 /**
- * Publishes a real `contract-spec` event to `log` (an @aiwa/record
+ * Publishes a real `contract-spec` event to `log` (an event-log.js
  * EventLog) — the event's own real, content-addressed id becomes the
  * contract's real, immutable identity from this point on. `identity`
- * must be a real, secret-key-bearing @aiwa/record Identity: an event
+ * must be a real, secret-key-bearing identity.js Identity: an event
  * here is signed exactly like any other. `sourceCode` is embedded in
  * full — never only its hash — so the real code is genuinely
  * recoverable by anyone who receives this event, not merely

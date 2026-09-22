@@ -4,12 +4,12 @@
 //
 // This module's own lightweight keypair shape exists for Solana
 // interop (burn/transfer transactions need a real, Solana-Keypair-
-// shaped object) — it is a DIFFERENT representation from
-// @aiwa/record's own Identity class. `toRecordIdentity` bridges the
+// shaped object) — it is a DIFFERENT representation from this
+// package's own identity.js Identity class. `toIdentity` bridges the
 // two: the same real Ed25519 seed underlies both, so a domain derived
-// here (via BIP39, a passphrase, or freshly generated) can act as a
-// Record Identity too, for signing events/capabilities, without a
-// second, separate derivation.
+// here (via BIP39, a passphrase, or freshly generated) can act as an
+// Identity too, for signing events/capabilities, without a second,
+// separate derivation.
 
 import { SOLANA_INCINERATOR_ADDRESS } from './identity-cost.js';
 
@@ -246,10 +246,11 @@ export async function loadSolanaWeb3() {
   return mod;
 }
 
-// Bridges this module's Solana-shaped keypair into @aiwa/record's own
-// Identity — same real Ed25519 seed, the canonical shape the rest of
-// aiwa-core and aiwa-platform (events, capabilities) actually expect.
-export async function toRecordIdentity(keypair) {
-  const { identityFromSecretKey } = await import('@aiwa/record');
+// Bridges this module's Solana-shaped keypair into this package's own
+// event/capability Identity (identity.js) — same real Ed25519 seed,
+// the canonical shape aiwa-core and aiwa-platform (events,
+// capabilities) actually expect.
+export async function toIdentity(keypair) {
+  const { identityFromSecretKey } = await import('./identity.js');
   return identityFromSecretKey(toHex(keypair.secretKey.slice(0, 32)));
 }

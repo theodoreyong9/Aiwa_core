@@ -1,12 +1,20 @@
 # aiwa-core
 
-Validation: commitment, state, epoch, transition, VDF, proof, verification,
-progression. Pure — no transport, no storage, no GUN, no GitHub, no
-YourMine, no Jobber. Builds on [`@aiwa/record`](https://github.com/theodoreyong9/record)'s
-event/identity substrate; never reimplements it.
+Commitment, state, epoch, transition, VDF, proof, verification,
+progression. Pure — no transport, no GUN, no GitHub, no YourMine, no
+Jobber. Self-contained: no dependency on any repo outside this stack.
 
 ## What's here
 
+- **Event/identity substrate** (`identity.js`, `event.js`,
+  `event-log.js`, `materializer.js`, `data-store.js`) — Ed25519
+  identities that sign events and capabilities; a canonical,
+  content-addressed, self-verifying event (the signer's public key
+  travels inside the event, checked against the claimed author id, so
+  `EventLog.append()` never trusts an unverified event regardless of
+  source); a deliberately "stupid" `EventLog` (memory or IndexedDB
+  backend); a `DataStore` — a rebuildable projection over the log via a
+  pluggable `Materializer`, never itself the source of truth.
 - **Math primitives** (`bigint-math.js`, `fixed-point-math.js`, `units.js`) —
   deterministic BigInt modular exponentiation, primality testing, and a Q128
   fixed-point `ln`/`exp`/`pow` that agrees bit-for-bit across runtimes,
@@ -16,14 +24,14 @@ event/identity substrate; never reimplements it.
   (cheap to build, costs what it took to verify) and a real asymmetric
   Wesolowski VDF (expensive to produce, `O(log T)` to verify) over the
   RSA-2048 Factoring Challenge modulus.
-- **Identity** (`solana-wallet.js`, `identity-cost.js`, `hardware-attestation.js`)
-  — Ed25519 keypair derivation (fresh, from a secret key, from a
-  passphrase, from a standard BIP39 mnemonic at Solana's own derivation
-  path), Solana burn-transaction construction for identity activation
-  cost, and optional two-hop hardware-root attestation.
-  `toRecordIdentity(keypair)` bridges a derived keypair into an
-  `@aiwa/record` `Identity` — same seed, so a domain built here can sign
-  events and capabilities on the substrate below it.
+- **Solana-specific identity** (`solana-wallet.js`, `identity-cost.js`,
+  `hardware-attestation.js`) — Ed25519 keypair derivation (fresh, from a
+  secret key, from a passphrase, from a standard BIP39 mnemonic at
+  Solana's own derivation path), Solana burn-transaction construction for
+  identity activation cost, and optional two-hop hardware-root
+  attestation. `toIdentity(keypair)` bridges a derived keypair into this
+  package's own `identity.js` `Identity` — same seed, so a domain built
+  here can sign events and capabilities directly.
 - **Progression, reward, accrual, conservation, wallet** — the economic
   core: a domain's VDF-bound progression epoch, a reproducible Q128 reward
   formula, position/patience accounting, a Deactivate→Prove→Verify→Consume→Activate
@@ -53,30 +61,33 @@ event/identity substrate; never reimplements it.
   curve actually makes repeatedly abandoning an aging domain
   unprofitable.
 
-## Why this depends on `@aiwa/record` instead of reimplementing it
+## Where the event/identity substrate came from
 
-`@aiwa/record` already provides a tested, self-verifying event/identity
-substrate (`EventLog`, `Identity`, `createEvent`/`verifyEvent`) shared
-across this portfolio. Building a second one here would fork the single
-source of truth it's meant to be. `domain-id.js`'s old
-`deriveDomainId(publicKeyBytes)` is `@aiwa/record`'s own `deriveId` —
-identical SHA-256-of-pubkey derivation, not duplicated.
+`identity.js`/`event.js`/`event-log.js`/`materializer.js`/`data-store.js`
+started as a direct copy of [`theodoreyong9/record`](https://github.com/theodoreyong9/record)
+— an existing, tested, shared foundation across this portfolio, used as
+a reference rather than reinvented from scratch. Record itself is not
+one of this stack's own repos, so its code lives here as this package's
+own files, not as a live dependency: this repo is self-contained, and
+any future divergence between the two is expected and fine. `domain-id.js`'s
+old `deriveDomainId(publicKeyBytes)` is this file's own `deriveId` —
+identical SHA-256-of-pubkey derivation, not duplicated a second time
+under a different name.
 
 ## `adapt-event.js` — the one seam
 
 The reducers below (`progression`, `accrual`, `wallet`, `causal-tick`,
 `mirror`, the contracts) share a simple internal event convention:
 `{id, parents, payload}`, with `payload.type` selecting the reducer
-branch. `@aiwa/record`'s own wire event is richer —
+branch. `event.js`'s own wire event is richer —
 `{id, domain, author, authorPublicKey, parents, type, payload, createdAt, signature}`,
 with `type` as a top-level field. `toReducerEvent`/`toReducerEvents`
 bridge the two. This keeps every reducer a near-verbatim, independently
 testable state machine — signature/author bytes are a replication and
-verification concern (`@aiwa/record`'s own job), not something every
-fold needs to carry.
+verification concern, not something every fold needs to carry.
 
 `contract-registry.js`'s `publishContractSpec` is the one function that
-actually writes to an `@aiwa/record` `EventLog` (via `createEvent` +
+actually writes to an `event-log.js` `EventLog` (via `createEvent` +
 `log.append`) rather than only reading reducer-shaped events — publishing
 a new contract-spec event needs a real signing identity, which the other,
 purely-reducing modules never do.
@@ -101,8 +112,9 @@ purely-reducing modules never do.
 
 ## Status
 
-314 passing `node --test` cases. Depends on `@aiwa/record` via its GitHub
-URL (neither package is on npm yet).
+314 passing `node --test` cases. Self-contained — the only external
+dependencies are `@noble/curves`, `@noble/hashes`, `@scure/bip39`, and
+an optional `@solana/web3.js` peer dependency.
 
 ## Testing
 

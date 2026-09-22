@@ -203,7 +203,7 @@ test('the real, public CONTRACT_ID is present on every real, correctly-built com
 
 test('THE REAL OFFER-BUILDING PROPERTY: buildOfferPayload produces a real commitment and a real, wallet.js-compatible pre-signed transfer, ready to feed directly into verifyPayout', async () => {
   const { buildSignedTransferEvent } = await import('../src/wallet.js');
-  const { deriveId } = await import('@aiwa/record');
+  const { deriveId } = await import('../src/identity.js');
   const { buildOfferPayload, computeOutcomeHash, checkOutcome } = await import('../src/generous-transfer.js');
 
   const donor = makeKeypair();

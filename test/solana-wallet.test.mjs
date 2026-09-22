@@ -4,10 +4,10 @@ import * as solanaWeb3 from '@solana/web3.js';
 import {
   generateKeypair, keypairFromSecretKey, encryptSecretKey, decryptSecretKey,
   buildBurnTransaction, buildTransferTransaction, signAndSerialize, generateLightweightKeypair, lightweightKeypairFromSecretKey,
-  deriveKeypairFromPassphrase, deriveKeypairFromBip39Mnemonic, validateBip39Mnemonic, toRecordIdentity,
+  deriveKeypairFromPassphrase, deriveKeypairFromBip39Mnemonic, validateBip39Mnemonic, toIdentity,
 } from '../src/solana-wallet.js';
 import { SOLANA_INCINERATOR_ADDRESS } from '../src/identity-cost.js';
-import { deriveId } from '@aiwa/record';
+import { deriveId } from '../src/identity.js';
 
 test('generateKeypair produces a real, usable Ed25519 keypair', () => {
   const kp = generateKeypair(solanaWeb3);
@@ -173,16 +173,16 @@ test('validateBip39Mnemonic correctly distinguishes real, valid mnemonics from i
   assert.equal(await validateBip39Mnemonic('not a real mnemonic'), false);
 });
 
-test('toRecordIdentity bridges this module\'s keypair into a real @aiwa/record Identity sharing the identical Ed25519 seed', async () => {
+test('toIdentity bridges this module\'s keypair into a real identity.js Identity sharing the identical Ed25519 seed', async () => {
   const kp = await generateLightweightKeypair();
-  const identity = await toRecordIdentity(kp);
+  const identity = await toIdentity(kp);
   assert.equal(identity.id, await deriveId(kp.publicKey.toBytes()));
   assert.equal(identity.publicKey, Array.from(kp.publicKey.toBytes()).map((b) => b.toString(16).padStart(2, '0')).join(''));
 });
 
-test('toRecordIdentity can sign, and its signature verifies against the same identity', async () => {
+test('toIdentity can sign, and its signature verifies against the same identity', async () => {
   const kp = await generateLightweightKeypair();
-  const identity = await toRecordIdentity(kp);
+  const identity = await toIdentity(kp);
   const message = new TextEncoder().encode('hello');
   const signature = await identity.sign(message);
   assert.equal(await identity.verify(message, signature), true);

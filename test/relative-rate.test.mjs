@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ed25519 } from '@noble/curves/ed25519.js';
-import { deriveId } from '@aiwa/record';
+import { deriveId } from '../src/identity.js';
 import { initialIdentityCostState, registerIdentityCost } from '../src/identity-cost.js';
 import { buildRateWitness, verifyRateWitness, computeRelativeRate, computeEmergentRate, composeRelativeRates } from '../src/relative-rate.js';
 

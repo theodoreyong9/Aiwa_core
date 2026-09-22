@@ -5,7 +5,7 @@
 //
 // Events here use this package's own internal convention: {id,
 // parents, payload}, with payload.type — see adapt-event.js for the
-// bridge from @aiwa/record's own wire event shape.
+// bridge from event.js's own wire event shape.
 
 import { vdfSeed, verifyVdfChain } from './vdf.js';
 
