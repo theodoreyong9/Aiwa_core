@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>aiwa-core: real IndexedDB backend check</title>
+<script type="importmap">
+{ "imports": {
+  "@noble/curves/ed25519.js": "/node_modules/@noble/curves/ed25519.js",
+  "@noble/hashes/utils.js": "/node_modules/@noble/hashes/utils.js",
+  "@noble/hashes/sha2.js": "/node_modules/@noble/hashes/sha2.js"
+} }
+</script>
+</head>
+<body>
+<!--
+  A real browser check for createIndexedDbBackend() — event-log.js's
+  own IndexedDB persistence, which node --test can never exercise
+  (Node has no IndexedDB). Load this page with ?phase=write, then
+  reload with ?phase=reload: a genuinely fresh navigation (new JS
+  context, no carried-over memory) that only finds the real,
+  previously-written events if IndexedDB persistence is actually
+  working, not merely present in the source.
+
+  Needs a real static file server (ES modules and IndexedDB both
+  refuse to run from a file:// origin):
+    python3 -m http.server 8934   # from this repo's own root
+  then open http://127.0.0.1:8934/test-browser/indexeddb.html?phase=write,
+  then reload the same URL with ?phase=reload.
+-->
+<pre id="result">running...</pre>
+<script type="module">
+  import { EventLog, createIndexedDbBackend } from '../src/event-log.js';
+  import { generateIdentity } from '../src/identity.js';
+  import { createEvent } from '../src/event.js';
+
+  const resultEl = document.getElementById('result');
+  const phase = new URLSearchParams(location.search).get('phase') || 'write';
+
+  async function run() {
+    const backend = createIndexedDbBackend('aiwa-core-browser-check');
+    const log = new EventLog(backend);
+
+    if (phase === 'write') {
+      const identity = await generateIdentity();
+      const e1 = await createEvent(identity, { domain: 'test', parents: [], type: 'kv.set', payload: { key: 'a', value: 1 } });
+      await log.append(e1);
+      const e2 = await createEvent(identity, { domain: 'test', parents: [e1.id], type: 'kv.set', payload: { key: 'b', value: 2 } });
+      await log.append(e2);
+      window.__result = { phase: 'write', ids: [e1.id, e2.id], heads: await log.head(), size: (await backend.allIds()).length };
+    } else {
+      // A fresh page load, a fresh EventLog instance, same real
+      // IndexedDB database name — nothing carried over in JS memory.
+      // Finding the real, previously-appended events here means
+      // persistence is genuine, not an artifact of one page's lifetime.
+      const allIds = await backend.allIds();
+      const events = await Promise.all(allIds.map((id) => log.get(id)));
+      window.__result = { phase: 'reload', size: allIds.length, payloads: events.map((e) => e.payload) };
+    }
+    resultEl.textContent = JSON.stringify(window.__result, null, 2);
+  }
+
+  run().catch((err) => {
+    window.__result = { error: String((err && err.stack) || err) };
+    resultEl.textContent = JSON.stringify(window.__result, null, 2);
+  });
+</script>
+</body>
+</html>

@@ -92,6 +92,27 @@ actually writes to an `event-log.js` `EventLog` (via `createEvent` +
 a new contract-spec event needs a real signing identity, which the other,
 purely-reducing modules never do.
 
+## `createIndexedDbBackend` — verified against a real browser
+
+`event-log.js`'s IndexedDB backend can't be exercised by `node --test`
+at all (Node has no IndexedDB) — `test-browser/indexeddb.html` is a
+real, runnable check against an actual browser instead: writes two
+real, signed events via `createIndexedDbBackend`, then a genuinely
+fresh page navigation (new JS context, nothing carried over in
+memory) reads them back through a brand-new `EventLog` instance
+pointed at the same database name. Run via Playwright against a real
+Chromium (needs a static file server — ES modules and IndexedDB both
+refuse a `file://` origin):
+
+```
+python3 -m http.server 8934   # from this repo's own root
+```
+then open `http://127.0.0.1:8934/test-browser/indexeddb.html?phase=write`,
+then reload the same URL with `?phase=reload`.
+
+Real, confirmed result: both events survived the reload, byte-for-byte,
+recovered purely from real IndexedDB storage — not a copied assumption.
+
 ## Honest limits
 
 - `rust-interop.test.mjs` (cross-runtime bit-for-bit verification of
