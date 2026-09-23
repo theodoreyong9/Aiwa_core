@@ -10,7 +10,7 @@ import {
   issueDelegation, buildSignedDelegatedTransferEvent, buildSignedDelegatedSplitEvent,
   deriveVoucherAddress, buildSignedVoucherRedeemEvent, buildSignedDelegatedVoucherRedeemEvent,
 } from '../src/wallet.js';
-import { buildSignedAccrualEvent, buildSignedClaimEvent } from '../src/accrual.js';
+import { buildSignedAccrualEvent, buildSignedClaimEvent, buildSignedDelegatedClaimEvent } from '../src/accrual.js';
 import { toUnits, fromUnits } from '../src/units.js';
 
 const rewardParams = { alpha: 1.1, beta: 2.2, gamma: 3, C: Math.pow(33, 3), minQ: 1 };
@@ -641,4 +641,69 @@ test('SECURITY: an accrual event forged by anyone other than the domain itself i
   const after = await applyWalletEvent(rewardParams, initialWalletState(), { id: 'a1', parents: [], payload: { type: 'accrual', ...forged } });
 
   assert.equal(after.accrual.positions[aliceId], undefined, 'a real signature from anyone other than the domain itself must never commit capital on its behalf');
+});
+
+test('a real delegate can trigger a claim landing the value under the real owner\'s domain, never the delegate\'s own', async () => {
+  const owner = makeSigner();
+  const ownerId = await deriveId(owner.pubkeyBytes);
+  const delegateKey = makeSigner();
+
+  const { state } = await readyToClaimDomain(owner);
+  const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, ownerId));
+
+  const delegation = await issueDelegation(owner.seed, owner.pubkeyBytes, delegateKey.pubkeyBytes);
+  const delegatedClaim = await buildSignedDelegatedClaimEvent(delegation, { claimId: 'claim1', amount: claimAmount }, delegateKey.seed, delegateKey.pubkeyBytes);
+  const after = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'delegated-claim', ...delegatedClaim } });
+
+  assert.equal(after.conservation.claims.claim1.owner, ownerId, 'the real owner receives the claim — never the delegate\'s own session identity');
+  assert.equal(after.conservation.claims.claim1.amount, toUnits(claimAmount));
+  assert.equal(after.accrual.balances[ownerId], toUnits(claimAmount));
+});
+
+test('SECURITY: a delegated claim with no real delegation ever issued creates no Conservation claim', async () => {
+  const owner = makeSigner();
+  const ownerId = await deriveId(owner.pubkeyBytes);
+  const delegateKey = makeSigner();
+
+  const { state } = await readyToClaimDomain(owner);
+  const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, ownerId));
+
+  const fakeDelegation = { ...(await issueDelegation(delegateKey.seed, delegateKey.pubkeyBytes, delegateKey.pubkeyBytes)), from: ownerId };
+  const forged = await buildSignedDelegatedClaimEvent(fakeDelegation, { claimId: 'claim1', amount: claimAmount }, delegateKey.seed, delegateKey.pubkeyBytes);
+  const after = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'delegated-claim', ...forged } });
+
+  assert.equal(after.conservation.claims.claim1, undefined, 'a forged delegation must never authorize claiming on the real owner\'s behalf');
+  assert.equal(after.accrual.balances[ownerId] ?? 0n, 0n);
+});
+
+test('SECURITY: a real delegation for a DIFFERENT delegate key cannot trigger a claim', async () => {
+  const owner = makeSigner();
+  const ownerId = await deriveId(owner.pubkeyBytes);
+  const realDelegate = makeSigner();
+  const impostor = makeSigner();
+
+  const { state } = await readyToClaimDomain(owner);
+  const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, ownerId));
+
+  const delegation = await issueDelegation(owner.seed, owner.pubkeyBytes, realDelegate.pubkeyBytes);
+  const impostorAttempt = await buildSignedDelegatedClaimEvent(delegation, { claimId: 'claim1', amount: claimAmount }, impostor.seed, impostor.pubkeyBytes);
+  const after = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'delegated-claim', ...impostorAttempt } });
+
+  assert.equal(after.conservation.claims.claim1, undefined, 'a delegation for one specific key must never authorize a different one');
+});
+
+test('SECURITY: a replayed delegated-claim nonce is rejected', async () => {
+  const owner = makeSigner();
+  const ownerId = await deriveId(owner.pubkeyBytes);
+  const delegateKey = makeSigner();
+
+  const { state } = await readyToClaimDomain(owner);
+  const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, ownerId) / 2n);
+
+  const delegation = await issueDelegation(owner.seed, owner.pubkeyBytes, delegateKey.pubkeyBytes);
+  const delegatedClaim = await buildSignedDelegatedClaimEvent(delegation, { claimId: 'claim1', amount: claimAmount }, delegateKey.seed, delegateKey.pubkeyBytes, { nonce: 'fixed' });
+  let once = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'delegated-claim', ...delegatedClaim } });
+  let twice = await applyWalletEvent(rewardParams, once, { id: 'c2', parents: ['c1'], payload: { type: 'delegated-claim', ...delegatedClaim } });
+
+  assert.deepEqual(once.accrual.balances, twice.accrual.balances, 'the replayed identical delegated claim must never debit the balance a second time');
 });

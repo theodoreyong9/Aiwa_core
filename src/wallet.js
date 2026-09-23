@@ -312,7 +312,13 @@ export async function applyWalletEvent(rewardParams, state, event, verifyFn, con
     return { ...state, accrual: await applyAccrualEvent(rewardParams, state.accrual, event, verifyFn) };
   }
 
-  if (payload.type === 'claim') {
+  // 'delegated-claim' shares this exact body: the discriminating
+  // verification (domain-owner signature vs. a delegate's, proven
+  // against an embedded real delegation) happens entirely inside
+  // applyAccrualEvent, keyed off this same event's own payload.type —
+  // by the time either type reaches issueClaim below, it has already
+  // been authenticated one way or the other.
+  if (payload.type === 'claim' || payload.type === 'delegated-claim') {
     const { domain, claimId } = payload;
     const reject = (reason) => ({ ...state, rejections: [...state.rejections, { eventId: event.id, reason }] });
     if (typeof claimId !== 'string' || !claimId) return reject('missing claimId');

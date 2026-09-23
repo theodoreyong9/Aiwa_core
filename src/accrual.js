@@ -96,6 +96,61 @@ async function verifyClaimAuthorization(event) {
   }
 }
 
+// Same one-time delegation object wallet.js's own issueDelegation
+// produces ({delegate, from, ownerPubkey, delegationSignature}),
+// reused here exactly like wallet.js's own delegated-transfer/
+// delegated-split/delegated-voucher-redeem: a channel's session key can
+// trigger a claim for its real owner (delegation.from) without the
+// owner's root key signing the claim itself. `canonicalDelegationMessage`
+// is duplicated (not imported) from wallet.js to avoid a circular
+// import — wallet.js already imports from this file.
+function canonicalDelegationMessage({ delegate, from }) {
+  return JSON.stringify({ delegate, from });
+}
+
+function canonicalDelegatedClaimMessage({ domain, amount, claimId, delegate, nonce, timestamp }) {
+  return JSON.stringify({ domain, amount, claimId: claimId ?? null, delegate, nonce, timestamp });
+}
+
+/** One real, delegate-signed claim, reusing an already-issued real delegation, landing the claimed value under the real owner's domain (delegation.from) — never needs the owner's own key again. */
+export async function buildSignedDelegatedClaimEvent(delegation, fields, delegateSeed, delegatePubkeyBytes, { now = Date.now(), nonce = crypto.randomUUID() } = {}) {
+  const { ed25519 } = await import('@noble/curves/ed25519.js');
+  const { claimId, amount } = fields;
+  const withMeta = { domain: delegation.from, amount, claimId, delegate: delegation.delegate, nonce, timestamp: now };
+  const signature = ed25519.sign(new TextEncoder().encode(canonicalDelegatedClaimMessage(withMeta)), delegateSeed);
+  return {
+    ...withMeta,
+    ownerPubkey: delegation.ownerPubkey,
+    delegationSignature: delegation.delegationSignature,
+    signerPubkey: toHex(delegatePubkeyBytes),
+    signature: toHex(signature),
+  };
+}
+
+async function verifyDelegatedClaimAuthorization(event) {
+  const { ed25519 } = await import('@noble/curves/ed25519.js');
+  const { domain, amount, claimId, delegate, nonce, timestamp, ownerPubkey, delegationSignature, signerPubkey, signature } = event;
+
+  if ((await deriveId(fromHex(ownerPubkey))) !== domain) return false; // the claim's own real domain must really derive from the embedded owner pubkey
+  if (toHex(fromHex(signerPubkey)) !== delegate) return false; // the claim's own real signer must be exactly the delegated key, not anyone else
+
+  let delegationValid;
+  try {
+    delegationValid = ed25519.verify(fromHex(delegationSignature), new TextEncoder().encode(canonicalDelegationMessage({ delegate, from: domain })), fromHex(ownerPubkey));
+  } catch {
+    return false;
+  }
+  if (!delegationValid) return false; // the real owner never actually authorized this delegate
+
+  let claimSigValid;
+  try {
+    claimSigValid = ed25519.verify(fromHex(signature), new TextEncoder().encode(canonicalDelegatedClaimMessage({ domain, amount, claimId, delegate, nonce, timestamp })), fromHex(signerPubkey));
+  } catch {
+    return false;
+  }
+  return claimSigValid; // the delegate really signed THIS specific claim, not a replay of a differently-addressed one
+}
+
 export function initialAccrualState() {
   return { progression: initialProgressionState(), positions: {}, balances: {}, usedNonces: {}, rejections: [] };
 }
@@ -153,6 +208,38 @@ export async function applyAccrualEvent(rewardParams, state, event, verifyFn) {
     }
     if (state.usedNonces[nonce]) return reject('nonce already used');
     if (!(await verifyClaimAuthorization(payload))) return reject('invalid signature: only the domain itself can claim its own accrued balance');
+
+    const claimableUnits = currentlyClaimableUnits(rewardParams, state, domain);
+
+    let amount;
+    try {
+      amount = toUnits(payload.amount);
+    } catch {
+      return reject('malformed amount');
+    }
+    if (!(amount > 0n)) return reject('amount must be positive');
+    if (amount > claimableUnits) return reject(`insufficient claimable: has ${claimableUnits}, tried to claim ${amount}`);
+
+    const currentEpoch = domainAge(state.progression, domain);
+    const currentBalance = state.balances[domain] ?? 0n;
+    return {
+      ...state,
+      positions: { ...state.positions, [domain]: { ...state.positions[domain], lastActionEpoch: currentEpoch } },
+      balances: { ...state.balances, [domain]: currentBalance + amount },
+      usedNonces: { ...state.usedNonces, [nonce]: true },
+    };
+  }
+
+  if (payload.type === 'delegated-claim') {
+    const { domain, nonce, delegate, ownerPubkey, delegationSignature, signerPubkey, signature } = payload;
+    const reject = (reason) => ({ ...state, rejections: [...state.rejections, { eventId: event.id, domain: domain ?? null, reason }] });
+    if (typeof domain !== 'string' || !domain) return reject('missing domain');
+    if (!state.positions[domain]) return reject('no committed capital for this domain');
+    if (![nonce, delegate, ownerPubkey, delegationSignature, signerPubkey, signature].every((v) => typeof v === 'string' && v)) {
+      return reject('malformed delegated-claim payload');
+    }
+    if (state.usedNonces[nonce]) return reject('nonce already used');
+    if (!(await verifyDelegatedClaimAuthorization(payload))) return reject('invalid delegated signature');
 
     const claimableUnits = currentlyClaimableUnits(rewardParams, state, domain);
 

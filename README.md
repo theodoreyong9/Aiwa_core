@@ -296,10 +296,20 @@ this project's own test suite.
   `usedNonces`, independent of `wallet.js`'s conservation-layer one).
   Covered by `accrual.test.mjs`'s and `wallet.test.mjs`'s own
   `SECURITY:` tests for forged and replayed claim/accrual events.
+  **Direct consequence, also fixed in the same pass**: `aiwa-lib`'s own
+  `Channel.claim()` had been built, in the same session, to deliberately
+  rely on the exact gap this closed — a channel's session key isn't the
+  domain's real key, so once `'claim'` became signer-scoped, a plain
+  `'claim'` from a channel stopped verifying. `buildSignedDelegatedClaimEvent`/
+  `'delegated-claim'` extends the identical delegation mechanism
+  `'delegated-transfer'`/`'delegated-split'`/`'delegated-voucher-redeem'`
+  already use: a channel's session key can trigger a claim, and the
+  claimed value still lands under the real owner's domain
+  (`delegation.from`), never the delegate's own.
 
 ## Status
 
-350 passing `node --test` cases (349 pure-JS, plus a real Rust build+run
+354 passing `node --test` cases (353 pure-JS, plus a real Rust build+run
 cross-check when `cargo` is available — see above). Self-contained —
 the only external dependencies are `@noble/curves`, `@noble/hashes`,
 `@scure/bip39`, and an optional `@solana/web3.js` peer dependency.
