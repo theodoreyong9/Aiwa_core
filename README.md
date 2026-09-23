@@ -129,15 +129,15 @@ of it, for exactly this reason.
   signing half (adapted from the app layer this was ported from, since a
   generic library has no business signing on an app's behalf without
   being asked).
-- **Contracts** (`contract-registry.js`, `contract-scan.js`,
-  `matching-contract.js`, `generous-transfer.js`) — publishing/verifying
-  a contract's own source against a pinned hash, generic event-scanning
-  helpers three separate contracts used to reimplement by hand, and two
-  real, composed example contracts (a deterministic "generous send"
-  bonus gated on a future VDF output, and a third-party matching
-  contract that composes with it via a direct function call — no shared
-  execution environment, so "composing" only ever means an ordinary
-  import).
+- **Contracts** (`contract-registry.js`, `contract-scan.js`) —
+  publishing/verifying a contract's own source against a pinned hash,
+  and generic event-scanning helpers for contract authors. (Two real,
+  ported example contracts — a "generous send" bonus gated on a future
+  VDF output, and a third-party matching contract composing with it —
+  were removed: real AIWA_chain functionality, correctly ported, but
+  never exposed by `aiwa-lib` or any app built on this, so it was dead
+  weight here rather than a real product decision. `contract-registry.js`
+  itself needs neither to demonstrate the pattern.)
 - **Churn analysis** (`churn-analysis.js`) — answers the concrete,
   parameter-dependent question of whether a deployment's identity-cost
   curve actually makes repeatedly abandoning an aging domain
@@ -228,8 +228,8 @@ weighted median, Conservation's own split invariant, Mirror's own
 reception monotonicity, relative-rate's own central ratio, Causal
 Tick's own consistency check, the real, *practical* Wesolowski
 verification (including real prime-derivation and Miller-Rabin
-primality testing), `generous-transfer.js`'s own deterministic
-outcome, and the reward formula's own Q128 fixed-point core — each
+primality testing), and the reward formula's own Q128 fixed-point
+core — each
 written from the same specification, never by wrapping or transpiling
 the JS. `test/rust-interop.test.mjs` builds it, runs it, and compares
 its real output against the real JS modules' own output, byte for
@@ -246,7 +246,7 @@ Ported from [AIWA_chain's own `interop/rust-vdf`](https://github.com/theodoreyon
 verifying `vdf.js`, `weighted-median.js`, `conservation.js`'s split
 invariant, `mirror.js`'s monotonicity check, `relative-rate.js`'s
 central ratio, `causal-tick.js`'s consistency check,
-`wesolowski-vdf.js`, `bigint-math.js`, `generous-transfer.js`, and
+`wesolowski-vdf.js`, `bigint-math.js`, and
 `reward.js`/`fixed-point-math.js` are algorithmically identical
 between the two codebases. `event.js`'s own canonical format genuinely
 differs (wider), so that part — together with the real, independently

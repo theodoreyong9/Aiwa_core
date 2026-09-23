@@ -16,8 +16,7 @@ own consistency check (`causal-tick.js`), the real, *practical*
 Wesolowski verification (`wesolowski-vdf.js`/`bigint-math.js`) —
 including real prime-derivation and Miller-Rabin primality testing,
 the one path an external, gas-constrained chain would genuinely use,
-never the raw symmetric chain — `generous-transfer.js`'s own
-deterministic outcome, and the real reward formula's own Q128
+never the raw symmetric chain — and the real reward formula's own Q128
 fixed-point core (`reward.js`'s `rewardFixed`, backed by
 `fixed-point-math.js`) — a real, from-scratch BigInt ln/exp/pow, never
 `Math.log`/`Math.pow`, since IEEE 754 only guarantees `+,-,*,/` agree
@@ -31,7 +30,7 @@ Ported from [AIWA_chain's own `interop/rust-vdf`](https://github.com/theodoreyon
 `weighted-median.js`, `conservation.js`'s split invariant,
 `mirror.js`'s monotonicity check, `relative-rate.js`'s central ratio,
 `causal-tick.js`'s consistency check, `wesolowski-vdf.js`,
-`bigint-math.js`, `generous-transfer.js`, and `reward.js`/
+`bigint-math.js`, and `reward.js`/
 `fixed-point-math.js` were all directly verified algorithmically
 identical to AIWA_chain's own versions before porting — not assumed.
 `event.js`'s own canonical id format genuinely differs (wider, and
@@ -56,8 +55,8 @@ cargo build --release
 
 Prints a real JSON object with every value below. Compare them against
 `computeVdfChain`, `createEvent`/`verifyEvent`, `weightedMedian`,
-`checkCausalConsistency`, `evaluate`/`verify`, `computeOutcomeHash`/
-`checkOutcome`, and `rewardFixed` in `src/` for the same inputs (see
+`checkCausalConsistency`, `evaluate`/`verify`, and `rewardFixed` in
+`src/` for the same inputs (see
 `test/rust-interop.test.mjs` for the exact vectors) — they match
 exactly.
 
@@ -90,12 +89,12 @@ separate, substantial undertaking — this demonstrates the specific
 claims that undertaking would depend on being true, not the whole
 thing.
 
-`matching-contract.js` and `contract-registry.js`'s own verification
-were considered for the same treatment and, like in AIWA_chain, found
-to be real orchestration over primitives already covered above
-(Ed25519 checks, SHA-256 hashing) rather than new mathematical or
-cryptographic computation of their own — reimplementing them here
-would mostly re-verify what's already independently checked.
+`contract-registry.js`'s own verification was considered for the same
+treatment and, like in AIWA_chain, found to be real orchestration over
+primitives already covered above (Ed25519 checks, SHA-256 hashing)
+rather than new mathematical or cryptographic computation of its
+own — reimplementing it here would mostly re-verify what's already
+independently checked.
 
 ## A real, practical note on toolchain versions
 

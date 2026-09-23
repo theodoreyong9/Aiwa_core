@@ -10,7 +10,6 @@ import { createEvent, verifyEvent } from '../src/event.js';
 import { weightedMedian } from '../src/weighted-median.js';
 import { checkCausalConsistency } from '../src/causal-tick.js';
 import { evaluate, verify as verifyWesolowski } from '../src/wesolowski-vdf.js';
-import { computeOutcomeHash, checkOutcome } from '../src/generous-transfer.js';
 import { rewardFixed } from '../src/reward.js';
 
 // A real, independent Rust implementation (interop/rust-vdf) of
@@ -126,15 +125,6 @@ test('THE REAL CROSS-RUNTIME PROPERTY: an independent Rust implementation produc
   assert.equal(rustOutput.consistentGap, consistentResult.gap);
   assert.equal(rustOutput.inconsistentCase, inconsistentResult.consistent);
   assert.equal(rustOutput.inconsistentGap, inconsistentResult.gap);
-
-  // generous-transfer.js's own real, deterministic outcome — a real
-  // loss and a real win, both independently recomputed here.
-  const losingHash = await computeOutcomeHash('commitment-id-abc', 'vdf-output-xyz-123');
-  const winningHash = await computeOutcomeHash('commitment-id-abc', 'vdf-output-90');
-  assert.equal(rustOutput.losingHash, losingHash, 'a real, honest-loss outcome hash must match exactly across runtimes');
-  assert.equal(rustOutput.losingCheck4, checkOutcome(losingHash, 4), 'the real threshold check itself must agree across runtimes, not just the raw hash');
-  assert.equal(rustOutput.winningHash, winningHash, 'a real, winning outcome hash must match exactly across runtimes');
-  assert.equal(rustOutput.winningCheck8, checkOutcome(winningHash, 8));
 
   // wesolowski-vdf.js's own real, PRACTICAL verification — the one
   // path a real, external, gas-constrained chain would actually use

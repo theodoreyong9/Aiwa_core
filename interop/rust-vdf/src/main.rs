@@ -198,32 +198,6 @@ fn check_causal_consistency(self_reported_epoch: i64, causal_tick: i64, toleranc
     (gap <= tolerance, gap)
 }
 
-// --- generous-transfer.js: computeOutcomeHash/checkOutcome — a real,
-// deterministic mechanism, never randomness. ---
-
-fn compute_outcome_hash(generous_send_event_id: &str, vdf_output: &str) -> String {
-    let combined = format!("{}:{}", generous_send_event_id, vdf_output);
-    to_hex(&sha256(combined.as_bytes()))
-}
-
-fn count_leading_zero_bits(hex_string: &str) -> u32 {
-    let mut bits = 0u32;
-    for ch in hex_string.chars() {
-        let nibble = ch.to_digit(16).unwrap_or(0);
-        if nibble == 0 {
-            bits += 4;
-            continue;
-        }
-        bits += nibble.leading_zeros() - 28;
-        break;
-    }
-    bits
-}
-
-fn check_outcome(hash_hex: &str, threshold_bits: u32) -> bool {
-    count_leading_zero_bits(hash_hex) >= threshold_bits
-}
-
 // --- wesolowski-vdf.js / bigint-math.js: the real, PRACTICAL
 // verification path (never the raw, symmetric hash chain — that would
 // be prohibitively expensive for any real, external, gas-constrained
@@ -577,10 +551,6 @@ fn main() {
     let (consistent_case, consistent_gap) = check_causal_consistency(100, 95, 10);
     let (inconsistent_case, inconsistent_gap) = check_causal_consistency(100, 50, 10);
 
-    // generous-transfer.js's own real, deterministic outcome.
-    let losing_hash = compute_outcome_hash("commitment-id-abc", "vdf-output-xyz-123");
-    let winning_hash = compute_outcome_hash("commitment-id-abc", "vdf-output-90");
-
     // wesolowski-vdf.js's own real, practical verification — the
     // identical, real, already-validated test vector this project's
     // predecessor (AIWA_chain) established, reused here since
@@ -609,7 +579,7 @@ fn main() {
     let reward_below_min_q = reward_fixed(10.0, 0.0, 1.0, 0.0, &reward_params);
 
     println!(
-        "{{\"vdf1\":\"{}\",\"vdf2\":\"{}\",\"vdf3\":\"{}\",\"authorPublicKey\":\"{}\",\"authorId\":\"{}\",\"eventId\":\"{}\",\"eventSignature\":\"{}\",\"selfVerify\":{},\"median1\":{},\"median2\":{},\"secondAmount\":\"{}\",\"monotonicityCase1\":{},\"monotonicityCase2\":{},\"ratio\":{},\"consistentCase\":{},\"consistentGap\":{},\"inconsistentCase\":{},\"inconsistentGap\":{},\"losingHash\":\"{}\",\"losingCheck4\":{},\"winningHash\":\"{}\",\"winningCheck8\":{},\"wesolowskiValid\":{},\"wesolowskiInvalid\":{},\"rewardBasic\":\"{}\",\"rewardOneYear\":\"{}\",\"rewardBelowMinQIsNone\":{}}}",
+        "{{\"vdf1\":\"{}\",\"vdf2\":\"{}\",\"vdf3\":\"{}\",\"authorPublicKey\":\"{}\",\"authorId\":\"{}\",\"eventId\":\"{}\",\"eventSignature\":\"{}\",\"selfVerify\":{},\"median1\":{},\"median2\":{},\"secondAmount\":\"{}\",\"monotonicityCase1\":{},\"monotonicityCase2\":{},\"ratio\":{},\"consistentCase\":{},\"consistentGap\":{},\"inconsistentCase\":{},\"inconsistentGap\":{},\"wesolowskiValid\":{},\"wesolowskiInvalid\":{},\"rewardBasic\":\"{}\",\"rewardOneYear\":\"{}\",\"rewardBelowMinQIsNone\":{}}}",
         vdf1, vdf2, vdf3,
         author_public_key_hex, author_id, event_id, event_signature_hex, self_verify,
         median1, median2,
@@ -617,8 +587,6 @@ fn main() {
         monotonicity_case1, monotonicity_case2,
         ratio,
         consistent_case, consistent_gap, inconsistent_case, inconsistent_gap,
-        losing_hash, check_outcome(&losing_hash, 4),
-        winning_hash, check_outcome(&winning_hash, 8),
         wesolowski_valid, wesolowski_invalid,
         reward_basic, reward_one_year, reward_below_min_q.is_none()
     );

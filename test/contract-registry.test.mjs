@@ -10,7 +10,7 @@ import { computeContractHash, publishContractSpec, verifyContractSource, readCon
 import { toReducerEvent } from '../src/adapt-event.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const realGenerousTransferSource = readFileSync(path.join(__dirname, '../src/generous-transfer.js'), 'utf-8');
+const realRewardFormulaSource = readFileSync(path.join(__dirname, '../src/reward.js'), 'utf-8');
 
 test('the identical real source always produces the identical real hash', async () => {
   const h1 = await computeContractHash('const x = 1;');
@@ -28,26 +28,26 @@ test('THE REAL PUBLISHING PROPERTY: a real contract, published against a real Ev
   const log = new EventLog();
   const identity = await generateIdentity();
   const { specEventId, sourceHash } = await publishContractSpec(identity, log, 'test-domain', {
-    name: 'generous-transfer', version: 1, sourceCode: realGenerousTransferSource, description: 'deterministic, never chance',
+    name: 'reward-formula', version: 1, sourceCode: realRewardFormulaSource, description: 'the real Q128 fixed-point reward core',
   });
   assert.ok(specEventId, 'a real event id must be produced');
-  assert.equal(sourceHash, await computeContractHash(realGenerousTransferSource));
+  assert.equal(sourceHash, await computeContractHash(realRewardFormulaSource));
 });
 
 test('THE REAL VERIFICATION PROPERTY: a real, correctly-matching source verifies against the real, already-published spec', async () => {
   const log = new EventLog();
   const identity = await generateIdentity();
-  const { specEventId } = await publishContractSpec(identity, log, 'test-domain', { name: 'generous-transfer', version: 1, sourceCode: realGenerousTransferSource, description: '' });
+  const { specEventId } = await publishContractSpec(identity, log, 'test-domain', { name: 'reward-formula', version: 1, sourceCode: realRewardFormulaSource, description: '' });
   const specEvent = toReducerEvent(await log.get(specEventId));
-  assert.equal(await verifyContractSource(specEvent, realGenerousTransferSource), true);
+  assert.equal(await verifyContractSource(specEvent, realRewardFormulaSource), true);
 });
 
 test('SECURITY: source that has been altered by even one real character fails verification against the real, already-published spec', async () => {
   const log = new EventLog();
   const identity = await generateIdentity();
-  const { specEventId } = await publishContractSpec(identity, log, 'test-domain', { name: 'generous-transfer', version: 1, sourceCode: realGenerousTransferSource, description: '' });
+  const { specEventId } = await publishContractSpec(identity, log, 'test-domain', { name: 'reward-formula', version: 1, sourceCode: realRewardFormulaSource, description: '' });
   const specEvent = toReducerEvent(await log.get(specEventId));
-  const tampered = realGenerousTransferSource + '\n// a real, added line, never in the original';
+  const tampered = realRewardFormulaSource + '\n// a real, added line, never in the original';
   assert.equal(await verifyContractSource(specEvent, tampered), false);
 });
 
@@ -63,10 +63,10 @@ test('SECURITY: verification of a non-contract-spec event is refused outright', 
 test('THE REAL RETRIEVAL PROPERTY: the actual source code is genuinely recoverable from an already-published event, never just its fingerprint', async () => {
   const log = new EventLog();
   const identity = await generateIdentity();
-  const { specEventId } = await publishContractSpec(identity, log, 'test-domain', { name: 'generous-transfer', version: 1, sourceCode: realGenerousTransferSource, description: '' });
+  const { specEventId } = await publishContractSpec(identity, log, 'test-domain', { name: 'reward-formula', version: 1, sourceCode: realRewardFormulaSource, description: '' });
   const specEvent = toReducerEvent(await log.get(specEventId));
   const recovered = readContractSource(specEvent);
-  assert.equal(recovered, realGenerousTransferSource, 'the exact, real, complete source must come back unchanged');
+  assert.equal(recovered, realRewardFormulaSource, 'the exact, real, complete source must come back unchanged');
 });
 
 test('readContractSource returns null, never throws, for a non-contract-spec event', () => {
@@ -96,22 +96,22 @@ test('scanContractSpecs ignores real, non-contract-spec events', async () => {
 });
 
 test('THE REAL STRUCTURAL CLOSE TO CONTRACTID COLLISION: registration succeeds when the real, current source genuinely matches the real, pinned expected hash', async () => {
-  const realHash = await computeContractHash(realGenerousTransferSource);
+  const realHash = await computeContractHash(realRewardFormulaSource);
   const fakeVerifier = () => 'this would be the real, trusted verifyPayout';
   const registry = await registerVerifiedContract({}, {
-    contractId: 'aiwa-generous-transfer-v1', sourceCode: realGenerousTransferSource, expectedHash: realHash, verifyPayoutFn: fakeVerifier,
+    contractId: 'aiwa-reward-formula-v1', sourceCode: realRewardFormulaSource, expectedHash: realHash, verifyPayoutFn: fakeVerifier,
   });
-  assert.equal(registry['aiwa-generous-transfer-v1'], fakeVerifier);
+  assert.equal(registry['aiwa-reward-formula-v1'], fakeVerifier);
 });
 
 test('SECURITY, THE EXACT REAL ATTACK JUST DEMONSTRATED, NOW CLOSED: a real, different, malicious source claiming a trusted contractId is refused outright — a name alone can never pass this check', async () => {
-  const realHash = await computeContractHash(realGenerousTransferSource);
+  const realHash = await computeContractHash(realRewardFormulaSource);
   const maliciousSource = 'export function verifyPayout() { return { claimId: "steal-everything" }; }'; // a real, different, genuinely malicious module
   const maliciousVerifier = () => ({ claimId: 'steal-everything' });
 
   await assert.rejects(
     registerVerifiedContract({}, {
-      contractId: 'aiwa-generous-transfer-v1', // the real, trusted name, claimed by an impostor
+      contractId: 'aiwa-reward-formula-v1', // the real, trusted name, claimed by an impostor
       sourceCode: maliciousSource, // but real, genuinely different source
       expectedHash: realHash, // the real, pinned hash of the REAL contract
       verifyPayoutFn: maliciousVerifier,
@@ -123,10 +123,10 @@ test('SECURITY, THE EXACT REAL ATTACK JUST DEMONSTRATED, NOW CLOSED: a real, dif
 
 test('SECURITY: a real mismatch never leaves a partial or silent registration — the real, existing registry is genuinely unchanged', async () => {
   const existingRegistry = { 'some-other-real-contract-v1': () => 'unrelated' };
-  const realHash = await computeContractHash(realGenerousTransferSource);
+  const realHash = await computeContractHash(realRewardFormulaSource);
   try {
     await registerVerifiedContract(existingRegistry, {
-      contractId: 'aiwa-generous-transfer-v1', sourceCode: 'not the real source at all', expectedHash: realHash, verifyPayoutFn: () => {},
+      contractId: 'aiwa-reward-formula-v1', sourceCode: 'not the real source at all', expectedHash: realHash, verifyPayoutFn: () => {},
     });
     assert.fail('must have thrown');
   } catch {

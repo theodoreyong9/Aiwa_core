@@ -69,13 +69,4 @@ export {
   scanContractSpecs, registerVerifiedContract,
 } from './contract-registry.js';
 export { collectProgressionParentIds, groupEventsByKey } from './contract-scan.js';
-export {
-  CONTRACT_ID as GENEROUS_TRANSFER_CONTRACT_ID, buildGenerousSendCommitment, verifyGenerousSendSignature,
-  computeOutcomeHash, checkOutcome, verifyQualifyingEpoch, resolveGenerousSend,
-  verifyPayout as verifyGenerousTransferPayout, buildOfferPayload,
-} from './generous-transfer.js';
-export {
-  CONTRACT_ID as MATCHING_CONTRACT_ID, buildMatchCommitment, verifyMatchCommitmentSignature,
-  verifyPayout as verifyMatchingContractPayout,
-} from './matching-contract.js';
 export { compareChurnVsStay, findMostProfitableChurnInterval } from './churn-analysis.js';

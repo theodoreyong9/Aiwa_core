@@ -443,11 +443,9 @@ export async function applyWalletEvent(rewardParams, state, event, verifyFn, con
     }
   }
 
-  // generous-transfer.js's own external contract — the one, narrow,
-  // explicitly justified exception to "never touch the core protocol
-  // for a contract". A real, generic extension point — never a
-  // per-contract case added here again. Any contract wanting to move
-  // real, already-owned AIWA conditionally exposes its own real
+  // A real, generic extension point — never a per-contract case added
+  // here. Any external contract wanting to move real, already-owned
+  // AIWA conditionally exposes its own real
   // `verifyPayout(payload)`, registered by the application under its
   // own real `contractId` (never wallet.js's own source) in
   // `contractVerifiers`. wallet.js only ever guarantees the one thing
