@@ -1,0 +1,13 @@
+[package]
+name = "vdf-interop"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sha2 = "0.10"
+serde_json = "1.0"
+num-bigint = "0.4"
+num-traits = "0.2"
+ed25519-dalek = "2"
+zeroize = "=1.7.0"
+base64ct = "=1.6.0"
