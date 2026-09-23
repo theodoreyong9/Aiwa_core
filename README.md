@@ -4,6 +4,46 @@ Commitment, state, epoch, transition, VDF, proof, verification,
 progression. Pure — no transport, no GUN, no GitHub, no YourMine, no
 Jobber. Self-contained: no dependency on any repo outside this stack.
 
+## Where this sits
+
+```
+       ┌────────────────────────────────────────────────┐
+       │ AIWA_project                                   │
+       │ one concrete deployment (a single static page, │
+       │ no build step, no fixed server)                │
+       └────────────────────────────────────────────────┘
+                                │
+                                │  imports all three, directly
+                                ▼
+              ┌──────────────────────────────────┐
+              ▼                                  ▼
+┌───────────────────────────┐      ┌───────────────────────────┐
+│ aiwa-lib                  │      │ aiwa-platform             │
+│ public wallet API (AIWA), │      │ transport, replication,   │
+│ Channel, contract SDK     │      │ capability-gated storage, │
+│                           │      │ bundle publishing         │
+└───────────────────────────┘      └───────────────────────────┘
+              │                                  │
+              └────────────────┬─────────────────┘
+                               ▼
+       ┌──────────────────────────────────────────────┐
+       │ aiwa-core  <-- you are here                  │
+       │ the protocol itself: identity, event log,    │
+       │ progression, accrual, conservation, Mirror,  │
+       │ Causal Tick, contracts, delegation, vouchers │
+       │                                              │
+       │ depends on nothing of its own - only         │
+       │ @noble/curves, @noble/hashes, @scure/bip39,  │
+       │ optional @solana/web3.js                     │
+       └──────────────────────────────────────────────┘
+```
+
+Nothing above this package may alter what counts as a valid state
+transition — that's the whole point of drawing it at the bottom.
+`aiwa-lib`'s `Channel` and bearer vouchers are real protocol
+extensions that live here, in `aiwa-core` itself, never layered on top
+of it, for exactly this reason.
+
 ## What's here
 
 - **Event/identity substrate** (`identity.js`, `event.js`,
