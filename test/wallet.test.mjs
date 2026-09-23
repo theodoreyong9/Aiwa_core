@@ -7,7 +7,7 @@ import { claimableNow } from '../src/accrual.js';
 import {
   initialWalletState, applyWalletEvent, materializeWallet,
   buildSignedTransferEvent, buildSignedSplitEvent, spendableClaims, totalBalance,
-  issueDelegation, buildSignedDelegatedTransferEvent,
+  issueDelegation, buildSignedDelegatedTransferEvent, buildSignedDelegatedSplitEvent,
 } from '../src/wallet.js';
 import { toUnits, fromUnits } from '../src/units.js';
 
@@ -285,11 +285,12 @@ test('a real delegate can click many times in a row, each a fresh, independent r
   const claimable = fromUnits(claimableNow(rewardParams, state.accrual, ownerId));
   let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: ownerId, claimId: 'claim1', amount: claimable } });
 
-  // Split the one real claim into three real, smaller ones (an ordinary, owner-signed split — delegation is about TRANSFER authorization, not splitting), then click three times.
-  const splitOne = await buildSignedSplitEvent({ claimId: 'claim1', owner: ownerId, firstAmount: (Number(claimable) / 3).toString(), firstId: 'c1a', secondId: 'c1b' }, owner.seed, owner.pubkeyBytes);
-  s = await applyWalletEvent(rewardParams, s, { id: 'split1', parents: ['c1'], payload: { type: 'split', ...splitOne } });
-  const splitTwo = await buildSignedSplitEvent({ claimId: 'c1b', owner: ownerId, firstAmount: (Number(claimable) / 3).toString(), firstId: 'c1c', secondId: 'c1d' }, owner.seed, owner.pubkeyBytes);
-  s = await applyWalletEvent(rewardParams, s, { id: 'split2', parents: ['split1'], payload: { type: 'split', ...splitTwo } });
+  // The SAME delegation also authorizes splitting — the owner's root
+  // key never signs again after issueDelegation, not even for this.
+  const splitOne = await buildSignedDelegatedSplitEvent(delegation, { claimId: 'claim1', firstAmount: (Number(claimable) / 3).toString(), firstId: 'c1a', secondId: 'c1b' }, delegateKey.seed, delegateKey.pubkeyBytes);
+  s = await applyWalletEvent(rewardParams, s, { id: 'split1', parents: ['c1'], payload: { type: 'delegated-split', ...splitOne } });
+  const splitTwo = await buildSignedDelegatedSplitEvent(delegation, { claimId: 'c1b', firstAmount: (Number(claimable) / 3).toString(), firstId: 'c1c', secondId: 'c1d' }, delegateKey.seed, delegateKey.pubkeyBytes);
+  s = await applyWalletEvent(rewardParams, s, { id: 'split2', parents: ['split1'], payload: { type: 'delegated-split', ...splitTwo } });
 
   for (const claimId of ['c1a', 'c1c', 'c1d']) {
     const send = await buildSignedDelegatedTransferEvent(delegation, { claimId, to: 'bob' }, delegateKey.seed, delegateKey.pubkeyBytes);
@@ -297,4 +298,60 @@ test('a real delegate can click many times in a row, each a fresh, independent r
   }
 
   assert.equal(spendableClaims(s, 'bob').length, 3, 'three real, independent clicks, each its own real transfer — the owner\'s root key signed exactly once, for the delegation, at the very start');
+});
+
+test('"sign once, click forever": a delegated split needs no exact-amount claim, and never touches the owner\'s key again', async () => {
+  const owner = makeSigner();
+  const ownerId = await deriveId(owner.pubkeyBytes);
+  const delegateKey = makeSigner();
+
+  const { state } = await readyToClaimDomain(ownerId);
+  const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, ownerId));
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: ownerId, claimId: 'claim1', amount: claimAmount } });
+
+  const delegation = await issueDelegation(owner.seed, owner.pubkeyBytes, delegateKey.pubkeyBytes);
+  const half = (Number(claimAmount) / 2).toString();
+  const split = await buildSignedDelegatedSplitEvent(delegation, { claimId: 'claim1', firstAmount: half, firstId: 'half1', secondId: 'half2' }, delegateKey.seed, delegateKey.pubkeyBytes);
+  s = await applyWalletEvent(rewardParams, s, { id: 'split1', parents: ['c1'], payload: { type: 'delegated-split', ...split } });
+
+  const send = await buildSignedDelegatedTransferEvent(delegation, { claimId: 'half1', to: 'bob' }, delegateKey.seed, delegateKey.pubkeyBytes);
+  s = await applyWalletEvent(rewardParams, s, { id: 't1', parents: ['split1'], payload: { type: 'delegated-transfer', ...send } });
+
+  assert.equal(spendableClaims(s, 'bob').length, 1);
+  assert.equal(spendableClaims(s, 'bob')[0].amount, toUnits(half));
+  assert.equal(s.conservation.claims.half2.owner, ownerId, 'the leftover half stays with the real owner');
+});
+
+test('SECURITY: a delegated split with no real delegation ever issued is rejected', async () => {
+  const owner = makeSigner();
+  const ownerId = await deriveId(owner.pubkeyBytes);
+  const delegateKey = makeSigner();
+
+  const { state } = await readyToClaimDomain(ownerId);
+  const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, ownerId));
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: ownerId, claimId: 'claim1', amount: claimAmount } });
+
+  const fakeDelegation = { ...(await issueDelegation(delegateKey.seed, delegateKey.pubkeyBytes, delegateKey.pubkeyBytes)), from: ownerId };
+  const forged = await buildSignedDelegatedSplitEvent(fakeDelegation, { claimId: 'claim1', firstAmount: (Number(claimAmount) / 2).toString(), firstId: 'half1', secondId: 'half2' }, delegateKey.seed, delegateKey.pubkeyBytes);
+  s = await applyWalletEvent(rewardParams, s, { id: 'split1', parents: ['c1'], payload: { type: 'delegated-split', ...forged } });
+
+  assert.equal(s.conservation.claims.claim1.status, 'active', 'a forged delegation must never authorize splitting the real owner\'s claim');
+});
+
+test('SECURITY: a replayed delegated-split nonce is rejected', async () => {
+  const owner = makeSigner();
+  const ownerId = await deriveId(owner.pubkeyBytes);
+  const delegateKey = makeSigner();
+
+  const { state } = await readyToClaimDomain(ownerId);
+  const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, ownerId));
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: ownerId, claimId: 'claim1', amount: claimAmount } });
+
+  const delegation = await issueDelegation(owner.seed, owner.pubkeyBytes, delegateKey.pubkeyBytes);
+  const split = await buildSignedDelegatedSplitEvent(delegation, { claimId: 'claim1', firstAmount: (Number(claimAmount) / 2).toString(), firstId: 'half1', secondId: 'half2' }, delegateKey.seed, delegateKey.pubkeyBytes, { nonce: 'fixed' });
+  let once = await applyWalletEvent(rewardParams, s, { id: 'split1', parents: ['c1'], payload: { type: 'delegated-split', ...split } });
+  let twice = await applyWalletEvent(rewardParams, once, { id: 'split2', parents: ['split1'], payload: { type: 'delegated-split', ...split } });
+
+  assert.equal(once.conservation.claims.half1.status, 'active', 'the first, real split applied');
+  assert.deepEqual(once.conservation, twice.conservation, 'the replayed split must never run a second time');
 });

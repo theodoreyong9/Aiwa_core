@@ -47,7 +47,7 @@ export {
 export {
   initialWalletState, buildSignedTransferEvent, buildSignedSplitEvent, applyWalletEvent,
   materializeWallet, spendableClaims, totalBalance,
-  issueDelegation, buildSignedDelegatedTransferEvent,
+  issueDelegation, buildSignedDelegatedTransferEvent, buildSignedDelegatedSplitEvent,
 } from './wallet.js';
 
 export {

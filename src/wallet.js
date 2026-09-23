@@ -155,6 +155,55 @@ async function verifySplitAuthorization(event) {
   return (await deriveId(fromHex(event.signerPubkey))) === event.owner;
 }
 
+// The same real delegation (see issueDelegation above) also authorizes
+// splitting the owner's own claims — a channel that needed the owner's
+// root key back the moment an amount didn't exactly match an existing
+// claim would not actually be "sign once, click forever". No separate
+// delegation to issue: canonicalDelegationMessage({delegate, from})
+// was never scoped to transfers only.
+function canonicalDelegatedSplitMessage({ claimId, owner, firstAmount, firstId, secondId, delegate, nonce, timestamp }) {
+  return JSON.stringify({ claimId, owner, firstAmount, firstId, secondId, delegate, nonce, timestamp });
+}
+
+/** One real, delegate-signed split of the owner's own claim, reusing an already-issued real delegation — never needs the owner's own key again. */
+export async function buildSignedDelegatedSplitEvent(delegation, fields, delegateSeed, delegatePubkeyBytes, { now = Date.now(), nonce = crypto.randomUUID() } = {}) {
+  const { ed25519 } = await import('@noble/curves/ed25519.js');
+  const { claimId, firstAmount, firstId, secondId } = fields;
+  const withMeta = { claimId, owner: delegation.from, firstAmount, firstId, secondId, delegate: delegation.delegate, nonce, timestamp: now };
+  const signature = ed25519.sign(new TextEncoder().encode(canonicalDelegatedSplitMessage(withMeta)), delegateSeed);
+  return {
+    ...withMeta,
+    ownerPubkey: delegation.ownerPubkey,
+    delegationSignature: delegation.delegationSignature,
+    signerPubkey: toHex(delegatePubkeyBytes),
+    signature: toHex(signature),
+  };
+}
+
+async function verifyDelegatedSplitAuthorization(event) {
+  const { ed25519 } = await import('@noble/curves/ed25519.js');
+  const { claimId, owner, firstAmount, firstId, secondId, delegate, nonce, timestamp, ownerPubkey, delegationSignature, signerPubkey, signature } = event;
+
+  if ((await deriveId(fromHex(ownerPubkey))) !== owner) return false;
+  if (toHex(fromHex(signerPubkey)) !== delegate) return false;
+
+  let delegationValid;
+  try {
+    delegationValid = ed25519.verify(fromHex(delegationSignature), new TextEncoder().encode(canonicalDelegationMessage({ delegate, from: owner })), fromHex(ownerPubkey));
+  } catch {
+    return false;
+  }
+  if (!delegationValid) return false;
+
+  let splitSigValid;
+  try {
+    splitSigValid = ed25519.verify(fromHex(signature), new TextEncoder().encode(canonicalDelegatedSplitMessage({ claimId, owner, firstAmount, firstId, secondId, delegate, nonce, timestamp })), fromHex(signerPubkey));
+  } catch {
+    return false;
+  }
+  return splitSigValid;
+}
+
 export async function applyWalletEvent(rewardParams, state, event, verifyFn, contractVerifiers = {}) {
   const payload = event.payload;
   if (!payload || typeof payload.type !== 'string') return state;
@@ -223,6 +272,25 @@ export async function applyWalletEvent(rewardParams, state, event, verifyFn, con
     if (![claimId, owner, firstId, secondId, nonce, signerPubkey, signature].every((v) => typeof v === 'string' && v)) return reject('malformed split payload');
     if (state.usedNonces[nonce]) return reject('nonce already used');
     if (!(await verifySplitAuthorization({ claimId, owner, firstAmount: payload.firstAmount, firstId, secondId, nonce, timestamp, signerPubkey, signature }))) return reject('invalid signature');
+    try {
+      const firstAmount = toUnits(payload.firstAmount);
+      const conservation = splitClaim(state.conservation, { claimId, firstAmount, firstId, secondId });
+      return { ...state, conservation, usedNonces: { ...state.usedNonces, [nonce]: true } };
+    } catch (e) {
+      return reject(e.message);
+    }
+  }
+
+  if (payload.type === 'delegated-split') {
+    const { claimId, owner, firstId, secondId, delegate, nonce, timestamp, ownerPubkey, delegationSignature, signerPubkey, signature } = payload;
+    const reject = (reason) => ({ ...state, rejections: [...state.rejections, { eventId: event.id, reason }] });
+    if (![claimId, owner, firstId, secondId, delegate, nonce, ownerPubkey, delegationSignature, signerPubkey, signature].every((v) => typeof v === 'string' && v)) {
+      return reject('malformed delegated-split payload');
+    }
+    if (state.usedNonces[nonce]) return reject('nonce already used');
+    if (!(await verifyDelegatedSplitAuthorization({ claimId, owner, firstAmount: payload.firstAmount, firstId, secondId, delegate, nonce, timestamp, ownerPubkey, delegationSignature, signerPubkey, signature }))) {
+      return reject('invalid delegated signature');
+    }
     try {
       const firstAmount = toUnits(payload.firstAmount);
       const conservation = splitClaim(state.conservation, { claimId, firstAmount, firstId, secondId });
