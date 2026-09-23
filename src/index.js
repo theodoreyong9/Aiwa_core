@@ -39,7 +39,10 @@ export {
 
 export { initialProgressionState, applyProgressionEvent, materializeProgression } from './progression.js';
 export { RewardError, rewardFixed, reward, elapsedEpochs, domainAge } from './reward.js';
-export { initialAccrualState, applyAccrualEvent, materializeAccrual, claimableNow } from './accrual.js';
+export {
+  initialAccrualState, applyAccrualEvent, materializeAccrual, claimableNow,
+  buildSignedAccrualEvent, buildSignedClaimEvent,
+} from './accrual.js';
 export {
   initialConservationState, issueClaim, splitClaim, deactivate, proveTransfer,
   verify as verifyConservationProof, consume, activate, transfer, identityDerivation,

@@ -10,6 +10,7 @@ import {
   issueDelegation, buildSignedDelegatedTransferEvent, buildSignedDelegatedSplitEvent,
   deriveVoucherAddress, buildSignedVoucherRedeemEvent, buildSignedDelegatedVoucherRedeemEvent,
 } from '../src/wallet.js';
+import { buildSignedAccrualEvent, buildSignedClaimEvent } from '../src/accrual.js';
 import { toUnits, fromUnits } from '../src/units.js';
 
 const rewardParams = { alpha: 1.1, beta: 2.2, gamma: 3, C: Math.pow(33, 3), minQ: 1 };
@@ -37,40 +38,51 @@ async function advanceEpochs(state, domain, count) {
   return state;
 }
 
-async function readyToClaimDomain(domain, epochs = 5, b = 10) {
+async function readyToClaimDomain(signer, epochs = 5, b = 10) {
+  const domain = await deriveId(signer.pubkeyBytes);
   let state = await advanceEpochs(initialWalletState(), domain, epochs);
   const accrualId = crypto.randomUUID();
-  state = await applyWalletEvent(rewardParams, state, { id: accrualId, parents: [], payload: { type: 'accrual', domain, b } });
+  const signedAccrual = await buildSignedAccrualEvent({ domain, b }, signer.seed, signer.pubkeyBytes);
+  state = await applyWalletEvent(rewardParams, state, { id: accrualId, parents: [], payload: { type: 'accrual', ...signedAccrual } });
   state = await advanceEpochs(state, domain, epochs);
   return { state, lastId: accrualId };
 }
 
 test('a claim event debits the accrued position and creates a matching Conservation claim', async () => {
-  const { state } = await readyToClaimDomain('alice');
-  const claimable = claimableNow(rewardParams, state.accrual, 'alice');
+  const alice = makeSigner();
+  const aliceId = await deriveId(alice.pubkeyBytes);
+  const { state } = await readyToClaimDomain(alice);
+  const claimable = claimableNow(rewardParams, state.accrual, aliceId);
   assert.ok(claimable > 0n);
   const claimAmount = fromUnits(claimable);
-  const after = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: 'alice', claimId: 'claim1', amount: claimAmount } });
+  const signedClaim = await buildSignedClaimEvent({ domain: aliceId, claimId: 'claim1', amount: claimAmount }, alice.seed, alice.pubkeyBytes);
+  const after = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...signedClaim } });
   assert.equal(after.conservation.claims.claim1.amount, toUnits(claimAmount));
-  assert.equal(after.conservation.claims.claim1.owner, 'alice');
-  assert.equal(after.accrual.balances.alice, toUnits(claimAmount));
+  assert.equal(after.conservation.claims.claim1.owner, aliceId);
+  assert.equal(after.accrual.balances[aliceId], toUnits(claimAmount));
 });
 
 test('SECURITY: a claim larger than what is currently claimable touches neither accrual nor conservation', async () => {
-  const { state } = await readyToClaimDomain('alice');
-  const after = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: 'alice', claimId: 'claim1', amount: '999999999' } });
-  assert.equal(after.accrual.balances.alice ?? 0n, 0n);
+  const alice = makeSigner();
+  const aliceId = await deriveId(alice.pubkeyBytes);
+  const { state } = await readyToClaimDomain(alice);
+  const signedClaim = await buildSignedClaimEvent({ domain: aliceId, claimId: 'claim1', amount: '999999999' }, alice.seed, alice.pubkeyBytes);
+  const after = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...signedClaim } });
+  assert.equal(after.accrual.balances[aliceId] ?? 0n, 0n);
   assert.equal(after.conservation.claims.claim1, undefined);
 });
 
 test('SECURITY: a duplicate claimId is rejected before either side is touched', async () => {
-  const { state } = await readyToClaimDomain('alice');
-  const claimable = claimableNow(rewardParams, state.accrual, 'alice');
+  const alice = makeSigner();
+  const aliceId = await deriveId(alice.pubkeyBytes);
+  const { state } = await readyToClaimDomain(alice);
+  const claimable = claimableNow(rewardParams, state.accrual, aliceId);
   const claimAmount = fromUnits(claimable / 2n);
-  let after = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: 'alice', claimId: 'claim1', amount: claimAmount } });
-  const balanceAfterFirst = after.accrual.balances.alice;
-  after = await applyWalletEvent(rewardParams, after, { id: 'c2', parents: ['c1'], payload: { type: 'claim', domain: 'alice', claimId: 'claim1', amount: claimAmount } });
-  assert.equal(after.accrual.balances.alice, balanceAfterFirst);
+  const signedClaim = await buildSignedClaimEvent({ domain: aliceId, claimId: 'claim1', amount: claimAmount }, alice.seed, alice.pubkeyBytes);
+  let after = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...signedClaim } });
+  const balanceAfterFirst = after.accrual.balances[aliceId];
+  after = await applyWalletEvent(rewardParams, after, { id: 'c2', parents: ['c1'], payload: { type: 'claim', ...signedClaim } });
+  assert.equal(after.accrual.balances[aliceId], balanceAfterFirst);
 });
 
 test('a real signed transfer moves ownership between real identities', async () => {
@@ -78,10 +90,10 @@ test('a real signed transfer moves ownership between real identities', async () 
   const aliceId = await deriveId(alice.pubkeyBytes);
   const bobId = 'bob-domain-id';
 
-  const { state } = await readyToClaimDomain(aliceId);
+  const { state } = await readyToClaimDomain(alice);
   const claimable = claimableNow(rewardParams, state.accrual, aliceId);
   const claimAmount = fromUnits(claimable);
-  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: aliceId, claimId: 'claim1', amount: claimAmount } });
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...(await buildSignedClaimEvent({ domain: aliceId, claimId: 'claim1', amount: claimAmount }, alice.seed, alice.pubkeyBytes)) } });
 
   const transferEvent = await buildSignedTransferEvent({ claimId: 'claim1', from: aliceId, to: bobId }, alice.seed, alice.pubkeyBytes);
   s = await applyWalletEvent(rewardParams, s, { id: 't1', parents: ['c1'], payload: { type: 'transfer', ...transferEvent } });
@@ -96,10 +108,10 @@ test('SECURITY: a forged transfer is rejected', async () => {
   const attacker = makeSigner();
   const aliceId = await deriveId(alice.pubkeyBytes);
 
-  const { state } = await readyToClaimDomain(aliceId);
+  const { state } = await readyToClaimDomain(alice);
   const claimable = claimableNow(rewardParams, state.accrual, aliceId);
   const claimAmount = fromUnits(claimable);
-  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: aliceId, claimId: 'claim1', amount: claimAmount } });
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...(await buildSignedClaimEvent({ domain: aliceId, claimId: 'claim1', amount: claimAmount }, alice.seed, alice.pubkeyBytes)) } });
 
   const forged = await buildSignedTransferEvent({ claimId: 'claim1', from: aliceId, to: 'attacker-domain' }, attacker.seed, attacker.pubkeyBytes);
   s = await applyWalletEvent(rewardParams, s, { id: 't1', parents: ['c1'], payload: { type: 'transfer', ...forged } });
@@ -112,9 +124,9 @@ test('a replayed transfer nonce is rejected', async () => {
   const alice = makeSigner();
   const aliceId = await deriveId(alice.pubkeyBytes);
 
-  const { state } = await readyToClaimDomain(aliceId);
+  const { state } = await readyToClaimDomain(alice);
   const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, aliceId));
-  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: aliceId, claimId: 'claim1', amount: claimAmount } });
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...(await buildSignedClaimEvent({ domain: aliceId, claimId: 'claim1', amount: claimAmount }, alice.seed, alice.pubkeyBytes)) } });
 
   const event1 = await buildSignedTransferEvent({ claimId: 'claim1', from: aliceId, to: 'bob' }, alice.seed, alice.pubkeyBytes, { nonce: 'fixed' });
   s = await applyWalletEvent(rewardParams, s, { id: 't1', parents: ['c1'], payload: { type: 'transfer', ...event1 } });
@@ -127,9 +139,9 @@ test('a real signed split divides a real claim, both amounts real bigint', async
   const alice = makeSigner();
   const aliceId = await deriveId(alice.pubkeyBytes);
 
-  const { state } = await readyToClaimDomain(aliceId);
+  const { state } = await readyToClaimDomain(alice);
   const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, aliceId));
-  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: aliceId, claimId: 'claim1', amount: claimAmount } });
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...(await buildSignedClaimEvent({ domain: aliceId, claimId: 'claim1', amount: claimAmount }, alice.seed, alice.pubkeyBytes)) } });
 
   const totalUnits = toUnits(claimAmount);
   const firstAmount = fromUnits(totalUnits / 2n);
@@ -140,11 +152,14 @@ test('a real signed split divides a real claim, both amounts real bigint', async
 });
 
 test('totalBalance sums unclaimed-but-growing plus already-claimed, with no double count once a claim exists', async () => {
-  const { state } = await readyToClaimDomain('alice');
-  const claimableBefore = claimableNow(rewardParams, state.accrual, 'alice');
+  const alice = makeSigner();
+  const aliceId = await deriveId(alice.pubkeyBytes);
+  const { state } = await readyToClaimDomain(alice);
+  const claimableBefore = claimableNow(rewardParams, state.accrual, aliceId);
   const claimAmount = fromUnits(claimableBefore);
-  const s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: 'alice', claimId: 'claim1', amount: claimAmount } });
-  const total = totalBalance(rewardParams, s, 'alice');
+  const signedClaim = await buildSignedClaimEvent({ domain: aliceId, claimId: 'claim1', amount: claimAmount }, alice.seed, alice.pubkeyBytes);
+  const s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...signedClaim } });
+  const total = totalBalance(rewardParams, s, aliceId);
   assert.ok(total >= toUnits(claimAmount), 'must be at least what was claimed');
   assert.ok(total < toUnits(claimAmount) * 2n, 'must never double-count the same already-claimed value');
 });
@@ -163,7 +178,8 @@ test('materializeWallet folds a real, complete sequence end to end', async () =>
     lastId = id;
     previousOutput = vdfOutput;
   }
-  events.push({ id: 'a1', parents: [lastId], payload: { type: 'accrual', domain: aliceId, b: 10 } });
+  const signedAccrual = await buildSignedAccrualEvent({ domain: aliceId, b: 10 }, alice.seed, alice.pubkeyBytes);
+  events.push({ id: 'a1', parents: [lastId], payload: { type: 'accrual', ...signedAccrual } });
   const state = await materializeWallet(rewardParams, events);
   assert.equal(state.accrual.progression.domains[aliceId].epoch, 3);
   assert.equal(state.accrual.positions[aliceId].b, 10);
@@ -205,9 +221,9 @@ test('"sign once, click many times": a real delegation lets a delegate key move 
   const ownerId = await deriveId(owner.pubkeyBytes);
   const delegateKey = makeSigner();
 
-  const { state } = await readyToClaimDomain(ownerId);
+  const { state } = await readyToClaimDomain(owner);
   const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, ownerId));
-  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: ownerId, claimId: 'claim1', amount: claimAmount } });
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...(await buildSignedClaimEvent({ domain: ownerId, claimId: 'claim1', amount: claimAmount }, owner.seed, owner.pubkeyBytes)) } });
 
   // The one, real signature the owner's own root key ever produces for this whole channel.
   const delegation = await issueDelegation(owner.seed, owner.pubkeyBytes, delegateKey.pubkeyBytes);
@@ -227,9 +243,9 @@ test('SECURITY: a delegated transfer with no real delegation ever issued is reje
   const ownerId = await deriveId(owner.pubkeyBytes);
   const delegateKey = makeSigner();
 
-  const { state } = await readyToClaimDomain(ownerId);
+  const { state } = await readyToClaimDomain(owner);
   const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, ownerId));
-  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: ownerId, claimId: 'claim1', amount: claimAmount } });
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...(await buildSignedClaimEvent({ domain: ownerId, claimId: 'claim1', amount: claimAmount }, owner.seed, owner.pubkeyBytes)) } });
 
   // The delegate signs everything themselves — a real delegation, but
   // issued by their OWN key, never the real owner's — then forges the
@@ -248,9 +264,9 @@ test('SECURITY: a real delegation for a DIFFERENT delegate key cannot be reused 
   const realDelegate = makeSigner();
   const impostor = makeSigner();
 
-  const { state } = await readyToClaimDomain(ownerId);
+  const { state } = await readyToClaimDomain(owner);
   const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, ownerId));
-  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: ownerId, claimId: 'claim1', amount: claimAmount } });
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...(await buildSignedClaimEvent({ domain: ownerId, claimId: 'claim1', amount: claimAmount }, owner.seed, owner.pubkeyBytes)) } });
 
   const delegation = await issueDelegation(owner.seed, owner.pubkeyBytes, realDelegate.pubkeyBytes); // authorizes realDelegate specifically
   const impostorAttempt = await buildSignedDelegatedTransferEvent(delegation, { claimId: 'claim1', to: 'attacker' }, impostor.seed, impostor.pubkeyBytes); // but impostor signs instead
@@ -264,9 +280,9 @@ test('SECURITY: a replayed delegated-transfer nonce is rejected, exactly like an
   const ownerId = await deriveId(owner.pubkeyBytes);
   const delegateKey = makeSigner();
 
-  const { state } = await readyToClaimDomain(ownerId);
+  const { state } = await readyToClaimDomain(owner);
   const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, ownerId));
-  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: ownerId, claimId: 'claim1', amount: claimAmount } });
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...(await buildSignedClaimEvent({ domain: ownerId, claimId: 'claim1', amount: claimAmount }, owner.seed, owner.pubkeyBytes)) } });
 
   const delegation = await issueDelegation(owner.seed, owner.pubkeyBytes, delegateKey.pubkeyBytes);
   const event1 = await buildSignedDelegatedTransferEvent(delegation, { claimId: 'claim1', to: 'bob' }, delegateKey.seed, delegateKey.pubkeyBytes, { nonce: 'fixed' });
@@ -282,9 +298,9 @@ test('a real delegate can click many times in a row, each a fresh, independent r
   const delegateKey = makeSigner();
   const delegation = await issueDelegation(owner.seed, owner.pubkeyBytes, delegateKey.pubkeyBytes);
 
-  const { state } = await readyToClaimDomain(ownerId, 5, 30);
+  const { state } = await readyToClaimDomain(owner, 5, 30);
   const claimable = fromUnits(claimableNow(rewardParams, state.accrual, ownerId));
-  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: ownerId, claimId: 'claim1', amount: claimable } });
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...(await buildSignedClaimEvent({ domain: ownerId, claimId: 'claim1', amount: claimable }, owner.seed, owner.pubkeyBytes)) } });
 
   // The SAME delegation also authorizes splitting — the owner's root
   // key never signs again after issueDelegation, not even for this.
@@ -306,9 +322,9 @@ test('"sign once, click forever": a delegated split needs no exact-amount claim,
   const ownerId = await deriveId(owner.pubkeyBytes);
   const delegateKey = makeSigner();
 
-  const { state } = await readyToClaimDomain(ownerId);
+  const { state } = await readyToClaimDomain(owner);
   const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, ownerId));
-  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: ownerId, claimId: 'claim1', amount: claimAmount } });
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...(await buildSignedClaimEvent({ domain: ownerId, claimId: 'claim1', amount: claimAmount }, owner.seed, owner.pubkeyBytes)) } });
 
   const delegation = await issueDelegation(owner.seed, owner.pubkeyBytes, delegateKey.pubkeyBytes);
   const half = (Number(claimAmount) / 2).toString();
@@ -328,9 +344,9 @@ test('SECURITY: a delegated split with no real delegation ever issued is rejecte
   const ownerId = await deriveId(owner.pubkeyBytes);
   const delegateKey = makeSigner();
 
-  const { state } = await readyToClaimDomain(ownerId);
+  const { state } = await readyToClaimDomain(owner);
   const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, ownerId));
-  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: ownerId, claimId: 'claim1', amount: claimAmount } });
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...(await buildSignedClaimEvent({ domain: ownerId, claimId: 'claim1', amount: claimAmount }, owner.seed, owner.pubkeyBytes)) } });
 
   const fakeDelegation = { ...(await issueDelegation(delegateKey.seed, delegateKey.pubkeyBytes, delegateKey.pubkeyBytes)), from: ownerId };
   const forged = await buildSignedDelegatedSplitEvent(fakeDelegation, { claimId: 'claim1', firstAmount: (Number(claimAmount) / 2).toString(), firstId: 'half1', secondId: 'half2' }, delegateKey.seed, delegateKey.pubkeyBytes);
@@ -344,9 +360,9 @@ test('SECURITY: a replayed delegated-split nonce is rejected', async () => {
   const ownerId = await deriveId(owner.pubkeyBytes);
   const delegateKey = makeSigner();
 
-  const { state } = await readyToClaimDomain(ownerId);
+  const { state } = await readyToClaimDomain(owner);
   const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, ownerId));
-  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: ownerId, claimId: 'claim1', amount: claimAmount } });
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...(await buildSignedClaimEvent({ domain: ownerId, claimId: 'claim1', amount: claimAmount }, owner.seed, owner.pubkeyBytes)) } });
 
   const delegation = await issueDelegation(owner.seed, owner.pubkeyBytes, delegateKey.pubkeyBytes);
   const split = await buildSignedDelegatedSplitEvent(delegation, { claimId: 'claim1', firstAmount: (Number(claimAmount) / 2).toString(), firstId: 'half1', secondId: 'half2' }, delegateKey.seed, delegateKey.pubkeyBytes, { nonce: 'fixed' });
@@ -363,9 +379,9 @@ test('a real bearer voucher: issue by hash-lock, redeem by revealing the secret 
   const redeemer = makeSigner();
   const redeemerId = await deriveId(redeemer.pubkeyBytes);
 
-  const { state } = await readyToClaimDomain(issuerId);
+  const { state } = await readyToClaimDomain(issuer);
   const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, issuerId));
-  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: issuerId, claimId: 'claim1', amount: claimAmount } });
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...(await buildSignedClaimEvent({ domain: issuerId, claimId: 'claim1', amount: claimAmount }, issuer.seed, issuer.pubkeyBytes)) } });
 
   const secret = 'a real, random secret — this is what goes in the QR code';
   const voucherAddress = await deriveVoucherAddress(secret);
@@ -391,9 +407,9 @@ test('SECURITY: redeeming with the wrong secret has no real effect', async () =>
   const attacker = makeSigner();
   const attackerId = await deriveId(attacker.pubkeyBytes);
 
-  const { state } = await readyToClaimDomain(issuerId);
+  const { state } = await readyToClaimDomain(issuer);
   const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, issuerId));
-  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: issuerId, claimId: 'claim1', amount: claimAmount } });
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...(await buildSignedClaimEvent({ domain: issuerId, claimId: 'claim1', amount: claimAmount }, issuer.seed, issuer.pubkeyBytes)) } });
 
   const voucherAddress = await deriveVoucherAddress('the real secret');
   const issueTransfer = await buildSignedTransferEvent({ claimId: 'claim1', from: issuerId, to: voucherAddress }, issuer.seed, issuer.pubkeyBytes);
@@ -415,9 +431,9 @@ test('SECURITY: the real "only once" property — two real redeemers racing for 
   const bob = makeSigner();
   const bobId = await deriveId(bob.pubkeyBytes);
 
-  const { state } = await readyToClaimDomain(issuerId);
+  const { state } = await readyToClaimDomain(issuer);
   const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, issuerId));
-  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: issuerId, claimId: 'claim1', amount: claimAmount } });
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...(await buildSignedClaimEvent({ domain: issuerId, claimId: 'claim1', amount: claimAmount }, issuer.seed, issuer.pubkeyBytes)) } });
 
   const secret = 'shown once, in one QR code';
   const voucherAddress = await deriveVoucherAddress(secret);
@@ -444,9 +460,9 @@ test('SECURITY: a redeemer cannot claim a voucher into an identity they do not r
   const victim = makeSigner();
   const victimId = await deriveId(victim.pubkeyBytes);
 
-  const { state } = await readyToClaimDomain(issuerId);
+  const { state } = await readyToClaimDomain(issuer);
   const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, issuerId));
-  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: issuerId, claimId: 'claim1', amount: claimAmount } });
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...(await buildSignedClaimEvent({ domain: issuerId, claimId: 'claim1', amount: claimAmount }, issuer.seed, issuer.pubkeyBytes)) } });
 
   const secret = 'a real secret the attacker genuinely knows';
   const voucherAddress = await deriveVoucherAddress(secret);
@@ -471,9 +487,9 @@ test('SECURITY: a replayed voucher-redeem nonce is rejected', async () => {
   const redeemer = makeSigner();
   const redeemerId = await deriveId(redeemer.pubkeyBytes);
 
-  const { state } = await readyToClaimDomain(issuerId);
+  const { state } = await readyToClaimDomain(issuer);
   const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, issuerId));
-  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: issuerId, claimId: 'claim1', amount: claimAmount } });
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...(await buildSignedClaimEvent({ domain: issuerId, claimId: 'claim1', amount: claimAmount }, issuer.seed, issuer.pubkeyBytes)) } });
 
   const secret = 'replay test secret';
   const voucherAddress = await deriveVoucherAddress(secret);
@@ -495,9 +511,9 @@ test('a real delegate can redeem a voucher landing the value in the real owner\'
   const ownerId = await deriveId(owner.pubkeyBytes);
   const delegateKey = makeSigner();
 
-  const { state } = await readyToClaimDomain(issuerId);
+  const { state } = await readyToClaimDomain(issuer);
   const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, issuerId));
-  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: issuerId, claimId: 'claim1', amount: claimAmount } });
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...(await buildSignedClaimEvent({ domain: issuerId, claimId: 'claim1', amount: claimAmount }, issuer.seed, issuer.pubkeyBytes)) } });
 
   const secret = 'a real secret, redeemable through a channel';
   const voucherAddress = await deriveVoucherAddress(secret);
@@ -521,9 +537,9 @@ test('SECURITY: a delegated voucher redemption with no real delegation ever issu
   const ownerId = await deriveId(owner.pubkeyBytes);
   const delegateKey = makeSigner();
 
-  const { state } = await readyToClaimDomain(issuerId);
+  const { state } = await readyToClaimDomain(issuer);
   const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, issuerId));
-  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: issuerId, claimId: 'claim1', amount: claimAmount } });
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...(await buildSignedClaimEvent({ domain: issuerId, claimId: 'claim1', amount: claimAmount }, issuer.seed, issuer.pubkeyBytes)) } });
 
   const secret = 'a secret the forger genuinely knows';
   const voucherAddress = await deriveVoucherAddress(secret);
@@ -550,9 +566,9 @@ test('SECURITY: a real delegation for a DIFFERENT delegate key cannot redeem a v
   const realDelegate = makeSigner();
   const impostor = makeSigner();
 
-  const { state } = await readyToClaimDomain(issuerId);
+  const { state } = await readyToClaimDomain(issuer);
   const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, issuerId));
-  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: issuerId, claimId: 'claim1', amount: claimAmount } });
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...(await buildSignedClaimEvent({ domain: issuerId, claimId: 'claim1', amount: claimAmount }, issuer.seed, issuer.pubkeyBytes)) } });
 
   const secret = 'a secret the impostor also happens to know';
   const voucherAddress = await deriveVoucherAddress(secret);
@@ -574,9 +590,9 @@ test('SECURITY: a replayed delegated-voucher-redeem nonce is rejected', async ()
   const owner = makeSigner();
   const delegateKey = makeSigner();
 
-  const { state } = await readyToClaimDomain(issuerId);
+  const { state } = await readyToClaimDomain(issuer);
   const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, issuerId));
-  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: issuerId, claimId: 'claim1', amount: claimAmount } });
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...(await buildSignedClaimEvent({ domain: issuerId, claimId: 'claim1', amount: claimAmount }, issuer.seed, issuer.pubkeyBytes)) } });
 
   const secret = 'delegated replay test secret';
   const voucherAddress = await deriveVoucherAddress(secret);
@@ -590,4 +606,39 @@ test('SECURITY: a replayed delegated-voucher-redeem nonce is rejected', async ()
   let twice = await applyWalletEvent(rewardParams, once, { id: 'redeem2', parents: ['redeem1'], payload: { type: 'delegated-voucher-redeem', ...redeem } });
 
   assert.deepEqual(once.conservation, twice.conservation, 'the replayed identical event must never run a second time');
+});
+
+test('SECURITY: a claim event forged by anyone other than the domain itself creates no Conservation claim — the real, narrow griefing vector the signature check closes', async () => {
+  const alice = makeSigner();
+  const aliceId = await deriveId(alice.pubkeyBytes);
+  const attacker = makeSigner();
+
+  const { state } = await readyToClaimDomain(alice);
+  const claimable = claimableNow(rewardParams, state.accrual, aliceId);
+  assert.ok(claimable > 0n);
+  const claimAmount = fromUnits(claimable);
+
+  // Before this check existed, a completely unrelated identity could
+  // sign and submit a real 'claim' event naming a domain they have no
+  // relationship to, and it was honored as if the real owner had
+  // submitted it — not a theft (the resulting claim's owner is still
+  // the named domain, spendable only by its real key), but it let
+  // anyone reset that domain's own patience clock without consent.
+  const forged = await buildSignedClaimEvent({ domain: aliceId, claimId: 'claim1', amount: claimAmount }, attacker.seed, attacker.pubkeyBytes);
+  const after = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', ...forged } });
+
+  assert.equal(after.conservation.claims.claim1, undefined, 'a claim forged by a non-owner must never create a real Conservation claim');
+  assert.equal(after.accrual.balances[aliceId] ?? 0n, 0n, 'the real owner\'s balance must be untouched');
+  assert.deepEqual(after.accrual.positions[aliceId], state.accrual.positions[aliceId], 'the real owner\'s patience clock must be untouched by a claim they never signed');
+});
+
+test('SECURITY: an accrual event forged by anyone other than the domain itself is rejected', async () => {
+  const alice = makeSigner();
+  const aliceId = await deriveId(alice.pubkeyBytes);
+  const attacker = makeSigner();
+
+  const forged = await buildSignedAccrualEvent({ domain: aliceId, b: 1000 }, attacker.seed, attacker.pubkeyBytes);
+  const after = await applyWalletEvent(rewardParams, initialWalletState(), { id: 'a1', parents: [], payload: { type: 'accrual', ...forged } });
+
+  assert.equal(after.accrual.positions[aliceId], undefined, 'a real signature from anyone other than the domain itself must never commit capital on its behalf');
 });

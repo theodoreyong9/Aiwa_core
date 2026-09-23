@@ -74,7 +74,11 @@ of it, for exactly this reason.
   here can sign events and capabilities directly.
 - **Progression, reward, accrual, conservation, wallet** — the economic
   core: a domain's VDF-bound progression epoch, a reproducible Q128 reward
-  formula, position/patience accounting, a Deactivate→Prove→Verify→Consume→Activate
+  formula, position/patience accounting (`'accrual'`/`'claim'`, each
+  requiring a real Ed25519 signature proving the signer controls the
+  named domain — see `buildSignedAccrualEvent`/`buildSignedClaimEvent`
+  in `accrual.js`, and "Honest limits" below for the real gap this
+  closed), a Deactivate→Prove→Verify→Consume→Activate
   conservation protocol for claims, and a wallet layer composing both plus
   signed transfer/split — plus real delegation (`issueDelegation`/
   `buildSignedDelegatedTransferEvent`/`buildSignedDelegatedSplitEvent`):
@@ -266,28 +270,36 @@ this project's own test suite.
 - `solana-wallet.js`'s BIP39 test vectors and `wesolowski-vdf.js`'s RSA-2048
   modulus are exactly what they were in the source this was ported from,
   cross-checked the same way (see each file's own header).
-- **`'claim'` and `'accrual'` events are not signer-scoped at the
-  reducer level** — found directly, not assumed, while investigating
-  whether a channel's delegated session key could already submit a
-  claim: `adapt-event.js`'s `toReducerEvent` strips `author` before any
-  reducer ever sees an event (by design, so reducers stay pure), and
-  neither `applyWalletEvent`'s `'claim'` case nor `applyAccrualEvent`'s
-  checks `payload.domain` against who actually signed the outer
-  envelope. Confirmed concretely: a completely unrelated identity, with
-  no delegation and no relationship to the owner, can sign and submit a
-  real `'claim'` event naming someone else's domain, and it is honored
-  exactly as if the owner had submitted it themselves. This cannot
-  steal value (the resulting claim is still owned by the named domain,
-  spendable only by its real key) — but it does mean *anyone* can
+- **FIXED, PREVIOUSLY UNDOCUMENTED: `'claim'` and `'accrual'` events
+  were not signer-scoped at the reducer level.** Found directly, not
+  assumed, while investigating whether a channel's delegated session
+  key could already submit a claim: `adapt-event.js`'s `toReducerEvent`
+  strips `author` before any reducer ever sees an event (by design, so
+  reducers stay pure), and neither `applyWalletEvent`'s `'claim'` case
+  nor `applyAccrualEvent`'s checked `payload.domain` against who
+  actually signed the outer envelope. Confirmed concretely, with a
+  real, standalone script: a completely unrelated identity, with no
+  delegation and no relationship to the owner, could sign and submit a
+  real `'claim'` event naming someone else's domain, and it was honored
+  exactly as if the owner had submitted it themselves. This could never
+  steal value (the resulting claim was still owned by the named domain,
+  spendable only by its real key) — but it did mean *anyone* could
   trigger a domain's claim and, as a side effect, reset that domain's
   own patience clock (`lastActionEpoch`) without consent, a real,
-  narrow griefing vector against the `T` (patience) bonus. Not
-  addressed here — out of scope for this pass, flagged honestly rather
-  than silently left undocumented.
+  narrow griefing vector against the `T` (patience) bonus.
+  **Fixed**: `accrual.js` now requires a real Ed25519 signature on both
+  `'claim'` and `'accrual'` payloads, checked with the exact same
+  `deriveId(signerPubkey) === domain` discipline `wallet.js`'s own
+  `'transfer'`/`'split'` already apply — see `buildSignedAccrualEvent`/
+  `buildSignedClaimEvent` and their matching `verify*Authorization`
+  checks, each also nonce-scoped against replay (`accrual.js`'s own new
+  `usedNonces`, independent of `wallet.js`'s conservation-layer one).
+  Covered by `accrual.test.mjs`'s and `wallet.test.mjs`'s own
+  `SECURITY:` tests for forged and replayed claim/accrual events.
 
 ## Status
 
-344 passing `node --test` cases (343 pure-JS, plus a real Rust build+run
+350 passing `node --test` cases (349 pure-JS, plus a real Rust build+run
 cross-check when `cargo` is available — see above). Self-contained —
 the only external dependencies are `@noble/curves`, `@noble/hashes`,
 `@scure/bip39`, and an optional `@solana/web3.js` peer dependency.
