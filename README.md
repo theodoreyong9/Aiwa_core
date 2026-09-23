@@ -129,15 +129,16 @@ of it, for exactly this reason.
   signing half (adapted from the app layer this was ported from, since a
   generic library has no business signing on an app's behalf without
   being asked).
-- **Contracts** (`contract-registry.js`, `contract-scan.js`) —
-  publishing/verifying a contract's own source against a pinned hash,
-  and generic event-scanning helpers for contract authors. (Two real,
-  ported example contracts — a "generous send" bonus gated on a future
-  VDF output, and a third-party matching contract composing with it —
-  were removed: real AIWA_chain functionality, correctly ported, but
-  never exposed by `aiwa-lib` or any app built on this, so it was dead
-  weight here rather than a real product decision. `contract-registry.js`
-  itself needs neither to demonstrate the pattern.)
+- **Contracts** (`contract-registry.js`) — publishing/verifying a
+  contract's own source against a pinned hash. (Two real, ported
+  example contracts — a "generous send" bonus gated on a future VDF
+  output, and a third-party matching contract composing with it — plus
+  `contract-scan.js`'s own generic event-scanning helpers, factored out
+  after those two, were all removed: real, correctly-ported
+  functionality, but never exposed by `aiwa-lib` or any app built on
+  this, and `contract-scan.js`'s own helpers ended up with no real
+  caller even among the contracts that motivated them — dead weight
+  here rather than a real product decision.)
 - **Churn analysis** (`churn-analysis.js`) — answers the concrete,
   parameter-dependent question of whether a deployment's identity-cost
   curve actually makes repeatedly abandoning an aging domain
@@ -309,7 +310,7 @@ this project's own test suite.
 
 ## Status
 
-354 passing `node --test` cases (353 pure-JS, plus a real Rust build+run
+310 passing `node --test` cases (309 pure-JS, plus a real Rust build+run
 cross-check when `cargo` is available — see above). Self-contained —
 the only external dependencies are `@noble/curves`, `@noble/hashes`,
 `@scure/bip39`, and an optional `@solana/web3.js` peer dependency.

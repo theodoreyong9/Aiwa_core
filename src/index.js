@@ -68,5 +68,4 @@ export {
   computeContractHash, publishContractSpec, readContractSource, verifyContractSource,
   scanContractSpecs, registerVerifiedContract,
 } from './contract-registry.js';
-export { collectProgressionParentIds, groupEventsByKey } from './contract-scan.js';
 export { compareChurnVsStay, findMostProfitableChurnInterval } from './churn-analysis.js';
