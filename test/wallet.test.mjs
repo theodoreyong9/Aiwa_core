@@ -7,6 +7,7 @@ import { claimableNow } from '../src/accrual.js';
 import {
   initialWalletState, applyWalletEvent, materializeWallet,
   buildSignedTransferEvent, buildSignedSplitEvent, spendableClaims, totalBalance,
+  issueDelegation, buildSignedDelegatedTransferEvent,
 } from '../src/wallet.js';
 import { toUnits, fromUnits } from '../src/units.js';
 
@@ -196,4 +197,104 @@ test('THE REAL INCREMENTAL CATCH-UP PROPERTY: applying only newly-arrived events
   }
 
   assert.deepEqual(fullReplay, incremental, 'a real, partial-then-incremental catch-up must produce an identical real wallet state to a full replay — the exact property an incremental sync relies on to avoid O(total history) cost on every real sync');
+});
+
+test('"sign once, click many times": a real delegation lets a delegate key move an owner\'s claim repeatedly, without the owner\'s own key signing again', async () => {
+  const owner = makeSigner();
+  const ownerId = await deriveId(owner.pubkeyBytes);
+  const delegateKey = makeSigner();
+
+  const { state } = await readyToClaimDomain(ownerId);
+  const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, ownerId));
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: ownerId, claimId: 'claim1', amount: claimAmount } });
+
+  // The one, real signature the owner's own root key ever produces for this whole channel.
+  const delegation = await issueDelegation(owner.seed, owner.pubkeyBytes, delegateKey.pubkeyBytes);
+  assert.equal(delegation.from, ownerId);
+
+  // Every subsequent "click" reuses the SAME delegation, signed fresh each time by the delegate alone.
+  const send1 = await buildSignedDelegatedTransferEvent(delegation, { claimId: 'claim1', to: 'bob' }, delegateKey.seed, delegateKey.pubkeyBytes);
+  s = await applyWalletEvent(rewardParams, s, { id: 't1', parents: ['c1'], payload: { type: 'delegated-transfer', ...send1 } });
+
+  assert.equal(spendableClaims(s, 'bob').length, 1);
+  assert.equal(spendableClaims(s, 'bob')[0].amount, toUnits(claimAmount));
+  assert.equal(s.conservation.claims.claim1.status, 'consumed');
+});
+
+test('SECURITY: a delegated transfer with no real delegation ever issued is rejected', async () => {
+  const owner = makeSigner();
+  const ownerId = await deriveId(owner.pubkeyBytes);
+  const delegateKey = makeSigner();
+
+  const { state } = await readyToClaimDomain(ownerId);
+  const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, ownerId));
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: ownerId, claimId: 'claim1', amount: claimAmount } });
+
+  // The delegate signs everything themselves — a real delegation, but
+  // issued by their OWN key, never the real owner's — then forges the
+  // `from` field afterward to claim it was really the owner.
+  const fakeDelegation = { ...(await issueDelegation(delegateKey.seed, delegateKey.pubkeyBytes, delegateKey.pubkeyBytes)), from: ownerId };
+  const forged = await buildSignedDelegatedTransferEvent(fakeDelegation, { claimId: 'claim1', to: 'attacker' }, delegateKey.seed, delegateKey.pubkeyBytes);
+  s = await applyWalletEvent(rewardParams, s, { id: 't1', parents: ['c1'], payload: { type: 'delegated-transfer', ...forged } });
+
+  assert.equal(s.conservation.claims.claim1.owner, ownerId);
+  assert.equal(s.conservation.claims.claim1.status, 'active');
+});
+
+test('SECURITY: a real delegation for a DIFFERENT delegate key cannot be reused by an unauthorized key', async () => {
+  const owner = makeSigner();
+  const ownerId = await deriveId(owner.pubkeyBytes);
+  const realDelegate = makeSigner();
+  const impostor = makeSigner();
+
+  const { state } = await readyToClaimDomain(ownerId);
+  const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, ownerId));
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: ownerId, claimId: 'claim1', amount: claimAmount } });
+
+  const delegation = await issueDelegation(owner.seed, owner.pubkeyBytes, realDelegate.pubkeyBytes); // authorizes realDelegate specifically
+  const impostorAttempt = await buildSignedDelegatedTransferEvent(delegation, { claimId: 'claim1', to: 'attacker' }, impostor.seed, impostor.pubkeyBytes); // but impostor signs instead
+  s = await applyWalletEvent(rewardParams, s, { id: 't1', parents: ['c1'], payload: { type: 'delegated-transfer', ...impostorAttempt } });
+
+  assert.equal(s.conservation.claims.claim1.status, 'active', 'a delegation for one real key must never authorize a different one');
+});
+
+test('SECURITY: a replayed delegated-transfer nonce is rejected, exactly like an ordinary transfer', async () => {
+  const owner = makeSigner();
+  const ownerId = await deriveId(owner.pubkeyBytes);
+  const delegateKey = makeSigner();
+
+  const { state } = await readyToClaimDomain(ownerId);
+  const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, ownerId));
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: ownerId, claimId: 'claim1', amount: claimAmount } });
+
+  const delegation = await issueDelegation(owner.seed, owner.pubkeyBytes, delegateKey.pubkeyBytes);
+  const event1 = await buildSignedDelegatedTransferEvent(delegation, { claimId: 'claim1', to: 'bob' }, delegateKey.seed, delegateKey.pubkeyBytes, { nonce: 'fixed' });
+  s = await applyWalletEvent(rewardParams, s, { id: 't1', parents: ['c1'], payload: { type: 'delegated-transfer', ...event1 } });
+  s = await applyWalletEvent(rewardParams, s, { id: 't2', parents: ['t1'], payload: { type: 'delegated-transfer', ...event1 } });
+
+  assert.equal(spendableClaims(s, 'bob').length, 1, 'the replayed event must never move a second, already-consumed claim again');
+});
+
+test('a real delegate can click many times in a row, each a fresh, independent real transfer, reusing the identical one-time delegation', async () => {
+  const owner = makeSigner();
+  const ownerId = await deriveId(owner.pubkeyBytes);
+  const delegateKey = makeSigner();
+  const delegation = await issueDelegation(owner.seed, owner.pubkeyBytes, delegateKey.pubkeyBytes);
+
+  const { state } = await readyToClaimDomain(ownerId, 5, 30);
+  const claimable = fromUnits(claimableNow(rewardParams, state.accrual, ownerId));
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: ownerId, claimId: 'claim1', amount: claimable } });
+
+  // Split the one real claim into three real, smaller ones (an ordinary, owner-signed split — delegation is about TRANSFER authorization, not splitting), then click three times.
+  const splitOne = await buildSignedSplitEvent({ claimId: 'claim1', owner: ownerId, firstAmount: (Number(claimable) / 3).toString(), firstId: 'c1a', secondId: 'c1b' }, owner.seed, owner.pubkeyBytes);
+  s = await applyWalletEvent(rewardParams, s, { id: 'split1', parents: ['c1'], payload: { type: 'split', ...splitOne } });
+  const splitTwo = await buildSignedSplitEvent({ claimId: 'c1b', owner: ownerId, firstAmount: (Number(claimable) / 3).toString(), firstId: 'c1c', secondId: 'c1d' }, owner.seed, owner.pubkeyBytes);
+  s = await applyWalletEvent(rewardParams, s, { id: 'split2', parents: ['split1'], payload: { type: 'split', ...splitTwo } });
+
+  for (const claimId of ['c1a', 'c1c', 'c1d']) {
+    const send = await buildSignedDelegatedTransferEvent(delegation, { claimId, to: 'bob' }, delegateKey.seed, delegateKey.pubkeyBytes);
+    s = await applyWalletEvent(rewardParams, s, { id: `send-${claimId}`, parents: [`split2`], payload: { type: 'delegated-transfer', ...send } });
+  }
+
+  assert.equal(spendableClaims(s, 'bob').length, 3, 'three real, independent clicks, each its own real transfer — the owner\'s root key signed exactly once, for the delegation, at the very start');
 });

@@ -55,6 +55,85 @@ function canonicalSplitMessage({ claimId, owner, firstAmount, firstId, secondId,
   return JSON.stringify({ claimId, owner, firstAmount, firstId, secondId, nonce, timestamp });
 }
 
+// Real delegated authorization: "sign once, then click as many times
+// as you want" without ever moving funds into a separate, pre-funded
+// account first. Two REAL, separate signatures compose:
+//
+// - The real, one-time DELEGATION itself: the real claim owner signs
+//   `canonicalDelegationMessage({delegate, from})` — no amount, no
+//   expiry, by design (a deployment wanting either can layer it into
+//   its own contractVerifiers via 'contract-payout' instead of forcing
+//   it on every caller here). This is the one signature a slower,
+//   more-trusted context (the owner's own root key) ever has to
+//   produce for this whole channel.
+// - Each real, individual transfer: signed by the DELEGATE's own key,
+//   over `canonicalDelegatedTransferMessage(...)` — cheap, repeatable,
+//   never touches the owner's root key again.
+//
+// A transfer's actual real signer (verified via signerPubkey, exactly
+// like an ordinary transfer) is the delegate, NOT the claim's real
+// owner — `from` is instead proven via a SEPARATE, embedded proof:
+// ownerPubkey really derives to `from`, AND the embedded delegation
+// signature really verifies against that same ownerPubkey. Skipping
+// either check would let anyone claim an arbitrary `from` while
+// signing as themselves — the identical forgery class
+// aiwa-lib's own contract.js documents for `signedAction`.
+function canonicalDelegationMessage({ delegate, from }) {
+  return JSON.stringify({ delegate, from });
+}
+
+function canonicalDelegatedTransferMessage({ claimId, from, to, delegate, nonce, timestamp }) {
+  return JSON.stringify({ claimId, from, to, delegate, nonce, timestamp });
+}
+
+/** The real, one-time delegation signature — computed once by the real claim owner, then reused, unchanged, on every subsequent buildSignedDelegatedTransferEvent() call for this same delegate. */
+export async function issueDelegation(ownerSeed, ownerPubkeyBytes, delegatePubkeyBytes) {
+  const { ed25519 } = await import('@noble/curves/ed25519.js');
+  const delegate = toHex(delegatePubkeyBytes);
+  const from = await deriveId(ownerPubkeyBytes);
+  const signature = ed25519.sign(new TextEncoder().encode(canonicalDelegationMessage({ delegate, from })), ownerSeed);
+  return { delegate, from, ownerPubkey: toHex(ownerPubkeyBytes), delegationSignature: toHex(signature) };
+}
+
+/** One real, delegate-signed transfer, reusing an already-issued real delegation (see issueDelegation) — this is the repeatable "click" side; it never needs the owner's own key again. */
+export async function buildSignedDelegatedTransferEvent(delegation, fields, delegateSeed, delegatePubkeyBytes, { now = Date.now(), nonce = crypto.randomUUID() } = {}) {
+  const { ed25519 } = await import('@noble/curves/ed25519.js');
+  const { claimId, to } = fields;
+  const withMeta = { claimId, from: delegation.from, to, delegate: delegation.delegate, nonce, timestamp: now };
+  const signature = ed25519.sign(new TextEncoder().encode(canonicalDelegatedTransferMessage(withMeta)), delegateSeed);
+  return {
+    ...withMeta,
+    ownerPubkey: delegation.ownerPubkey,
+    delegationSignature: delegation.delegationSignature,
+    signerPubkey: toHex(delegatePubkeyBytes),
+    signature: toHex(signature),
+  };
+}
+
+async function verifyDelegatedTransferAuthorization(event) {
+  const { ed25519 } = await import('@noble/curves/ed25519.js');
+  const { claimId, from, to, delegate, nonce, timestamp, ownerPubkey, delegationSignature, signerPubkey, signature } = event;
+
+  if ((await deriveId(fromHex(ownerPubkey))) !== from) return false; // the claimed owner must really derive from the embedded owner pubkey
+  if (toHex(fromHex(signerPubkey)) !== delegate) return false; // the transfer's own real signer must be exactly the delegated key, not anyone else
+
+  let delegationValid;
+  try {
+    delegationValid = ed25519.verify(fromHex(delegationSignature), new TextEncoder().encode(canonicalDelegationMessage({ delegate, from })), fromHex(ownerPubkey));
+  } catch {
+    return false;
+  }
+  if (!delegationValid) return false; // the real owner never actually authorized this delegate
+
+  let transferSigValid;
+  try {
+    transferSigValid = ed25519.verify(fromHex(signature), new TextEncoder().encode(canonicalDelegatedTransferMessage({ claimId, from, to, delegate, nonce, timestamp })), fromHex(signerPubkey));
+  } catch {
+    return false;
+  }
+  return transferSigValid; // the delegate really signed THIS specific transfer, not a replay of a differently-addressed one
+}
+
 export async function buildSignedSplitEvent(fields, signerSeed, signerPubkeyBytes, { now = Date.now(), nonce = crypto.randomUUID() } = {}) {
   const { ed25519 } = await import('@noble/curves/ed25519.js');
   const withMeta = { ...fields, nonce, timestamp: now };
@@ -106,6 +185,30 @@ export async function applyWalletEvent(rewardParams, state, event, verifyFn, con
     if (![claimId, from, to, nonce, signerPubkey, signature].every((v) => typeof v === 'string' && v)) return reject('malformed transfer payload');
     if (state.usedNonces[nonce]) return reject('nonce already used');
     if (!(await verifyTransferAuthorization({ claimId, from, to, nonce, timestamp, signerPubkey, signature }))) return reject('invalid signature');
+    try {
+      const { state: conservation } = transfer(state.conservation, { claimId, from, to, n: 0, derivation: 'identity' }, derivations);
+      return { ...state, conservation, usedNonces: { ...state.usedNonces, [nonce]: true } };
+    } catch (e) {
+      return reject(e.message);
+    }
+  }
+
+  // "Sign once, then click as many times as you want": a real, one-time
+  // delegation (see issueDelegation) lets a real delegate key move the
+  // owner's already-owned claims repeatedly, without the owner's own
+  // root key signing more than once. No amount cap, no expiry — a real
+  // deployment wanting either layers it into contractVerifiers via
+  // 'contract-payout' instead of forcing it on every caller here.
+  if (payload.type === 'delegated-transfer') {
+    const { claimId, from, to, delegate, nonce, timestamp, ownerPubkey, delegationSignature, signerPubkey, signature } = payload;
+    const reject = (reason) => ({ ...state, rejections: [...state.rejections, { eventId: event.id, reason }] });
+    if (![claimId, from, to, delegate, nonce, ownerPubkey, delegationSignature, signerPubkey, signature].every((v) => typeof v === 'string' && v)) {
+      return reject('malformed delegated-transfer payload');
+    }
+    if (state.usedNonces[nonce]) return reject('nonce already used');
+    if (!(await verifyDelegatedTransferAuthorization({ claimId, from, to, delegate, nonce, timestamp, ownerPubkey, delegationSignature, signerPubkey, signature }))) {
+      return reject('invalid delegated signature');
+    }
     try {
       const { state: conservation } = transfer(state.conservation, { claimId, from, to, n: 0, derivation: 'identity' }, derivations);
       return { ...state, conservation, usedNonces: { ...state.usedNonces, [nonce]: true } };

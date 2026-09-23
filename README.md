@@ -36,7 +36,23 @@ Jobber. Self-contained: no dependency on any repo outside this stack.
   core: a domain's VDF-bound progression epoch, a reproducible Q128 reward
   formula, position/patience accounting, a Deactivate→Prove→Verify→Consume→Activate
   conservation protocol for claims, and a wallet layer composing both plus
-  signed transfer/split.
+  signed transfer/split — plus real delegation (`issueDelegation`/
+  `buildSignedDelegatedTransferEvent`): "sign once, then click as many
+  times as you want." A real claim owner signs ONE delegation
+  (`{delegate, from}`, no amount cap, no expiry by design — a
+  deployment wanting either layers it into its own `contractVerifiers`
+  via `'contract-payout'` instead of forcing it on every caller here),
+  and a delegate key can then move that owner's already-owned claims
+  repeatedly, each a fresh, cheap, independently-signed
+  `'delegated-transfer'` event, without the owner's own root key
+  signing again. No funds move anywhere at delegation time — nothing is
+  pre-funded into a separate account; the delegate only ever authorizes
+  moving what the owner already, genuinely owns, one real transfer at a
+  time. `wallet.js`'s own header comment covers the exact two-signature
+  scheme and why both the embedded delegation signature and the
+  transfer's own signer must be checked separately (skipping either is
+  the identical impersonation hole `aiwa-lib`'s own `contract.js`
+  documents for a naively-trusted `payload.from`).
 - **Trust and rate** (`causal-tick.js`, `relative-rate.js`) — a
   weighted-median "Causal Tick" (what other domains, weighted by
   committed capital, corroborate about a domain's position) and a
@@ -152,7 +168,7 @@ correct.
 
 ## Status
 
-326 passing `node --test` cases. Self-contained — the only external
+331 passing `node --test` cases. Self-contained — the only external
 dependencies are `@noble/curves`, `@noble/hashes`, `@scure/bip39`, and
 an optional `@solana/web3.js` peer dependency.
 
