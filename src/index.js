@@ -48,7 +48,9 @@ export {
   initialWalletState, buildSignedTransferEvent, buildSignedSplitEvent, applyWalletEvent,
   materializeWallet, spendableClaims, totalBalance,
   issueDelegation, buildSignedDelegatedTransferEvent, buildSignedDelegatedSplitEvent,
+  deriveVoucherAddress, buildSignedVoucherRedeemEvent,
 } from './wallet.js';
+
 
 export {
   initialMirrorState, canonicalReceptionMessage, buildReceptionCommitment, applyMirrorEvent,

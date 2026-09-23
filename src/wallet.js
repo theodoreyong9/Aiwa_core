@@ -204,6 +204,52 @@ async function verifyDelegatedSplitAuthorization(event) {
   return splitSigValid;
 }
 
+// A real, redeemable-by-whoever-shows-up-first voucher: a real, ordinary,
+// signed transfer (buildSignedTransferEvent, unchanged) to a SYNTHETIC
+// destination — the hash of a secret, not any real identity's derived
+// id — followed by a real 'voucher-redeem' revealing that secret. The
+// classic hash-lock pattern (the same idea a Lightning HTLC or a
+// Bitcoin "pay to hash of a preimage" script uses): whoever can
+// produce the preimage of a public hash proves they "know" it by
+// simply revealing it. Nothing in conservation.js validates that
+// owner/from/to are real identities — they're opaque strings — so the
+// issuing transfer needs no new protocol at all.
+//
+// "The QR can be copied, but only the first redemption succeeds" falls
+// straight out of conservation.js's own existing invariant, not
+// anything new: transfer() deactivates the claim, then activate() sets
+// its status to 'consumed'. A second redemption of the SAME claim (a
+// different redeemer racing for the same secret) calls deactivate()
+// again on an already-'consumed' claim and throws — caught below and
+// turned into an ordinary rejection, exactly like a replayed transfer.
+export async function deriveVoucherAddress(secret) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret));
+  return `voucher:${toHex(new Uint8Array(digest))}`;
+}
+
+function canonicalVoucherRedeemMessage({ claimId, secret, to, nonce, timestamp }) {
+  return JSON.stringify({ claimId, secret, to, nonce, timestamp });
+}
+
+/** The redeemer's own real signature over the revealed secret and where they want the value to land — proves THEY are making this specific redemption (not a replay of someone else's), even though nobody's root key ever "owned" the voucher address itself. */
+export async function buildSignedVoucherRedeemEvent(fields, signerSeed, signerPubkeyBytes, { now = Date.now(), nonce = crypto.randomUUID() } = {}) {
+  const { ed25519 } = await import('@noble/curves/ed25519.js');
+  const withMeta = { ...fields, nonce, timestamp: now };
+  const signature = ed25519.sign(new TextEncoder().encode(canonicalVoucherRedeemMessage(withMeta)), signerSeed);
+  return { ...withMeta, signerPubkey: toHex(signerPubkeyBytes), signature: toHex(signature) };
+}
+
+async function verifyVoucherRedemption(event) {
+  const { ed25519 } = await import('@noble/curves/ed25519.js');
+  const { claimId, secret, to, nonce, timestamp, signerPubkey, signature } = event;
+  if ((await deriveId(fromHex(signerPubkey))) !== to) return false; // the redeemer must really control the identity they're claiming the value into
+  try {
+    return ed25519.verify(fromHex(signature), new TextEncoder().encode(canonicalVoucherRedeemMessage({ claimId, secret, to, nonce, timestamp })), fromHex(signerPubkey));
+  } catch {
+    return false;
+  }
+}
+
 export async function applyWalletEvent(rewardParams, state, event, verifyFn, contractVerifiers = {}) {
   const payload = event.payload;
   if (!payload || typeof payload.type !== 'string') return state;
@@ -297,6 +343,21 @@ export async function applyWalletEvent(rewardParams, state, event, verifyFn, con
       return { ...state, conservation, usedNonces: { ...state.usedNonces, [nonce]: true } };
     } catch (e) {
       return reject(e.message);
+    }
+  }
+
+  if (payload.type === 'voucher-redeem') {
+    const { claimId, secret, to, nonce, timestamp, signerPubkey, signature } = payload;
+    const reject = (reason) => ({ ...state, rejections: [...state.rejections, { eventId: event.id, reason }] });
+    if (![claimId, secret, to, nonce, signerPubkey, signature].every((v) => typeof v === 'string' && v)) return reject('malformed voucher-redeem payload');
+    if (state.usedNonces[nonce]) return reject('nonce already used');
+    if (!(await verifyVoucherRedemption({ claimId, secret, to, nonce, timestamp, signerPubkey, signature }))) return reject('invalid redeemer signature');
+    try {
+      const from = await deriveVoucherAddress(secret);
+      const { state: conservation } = transfer(state.conservation, { claimId, from, to, n: 0, derivation: 'identity' }, derivations);
+      return { ...state, conservation, usedNonces: { ...state.usedNonces, [nonce]: true } };
+    } catch (e) {
+      return reject(e.message); // covers both a wrong secret (claim.owner mismatch inside proveTransfer) AND a real double-redemption race (deactivate() on an already-consumed claim)
     }
   }
 

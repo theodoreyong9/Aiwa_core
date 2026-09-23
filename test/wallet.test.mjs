@@ -8,6 +8,7 @@ import {
   initialWalletState, applyWalletEvent, materializeWallet,
   buildSignedTransferEvent, buildSignedSplitEvent, spendableClaims, totalBalance,
   issueDelegation, buildSignedDelegatedTransferEvent, buildSignedDelegatedSplitEvent,
+  deriveVoucherAddress, buildSignedVoucherRedeemEvent,
 } from '../src/wallet.js';
 import { toUnits, fromUnits } from '../src/units.js';
 
@@ -354,4 +355,135 @@ test('SECURITY: a replayed delegated-split nonce is rejected', async () => {
 
   assert.equal(once.conservation.claims.half1.status, 'active', 'the first, real split applied');
   assert.deepEqual(once.conservation, twice.conservation, 'the replayed split must never run a second time');
+});
+
+test('a real bearer voucher: issue by hash-lock, redeem by revealing the secret — "the QR can be copied, but only the first redemption succeeds"', async () => {
+  const issuer = makeSigner();
+  const issuerId = await deriveId(issuer.pubkeyBytes);
+  const redeemer = makeSigner();
+  const redeemerId = await deriveId(redeemer.pubkeyBytes);
+
+  const { state } = await readyToClaimDomain(issuerId);
+  const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, issuerId));
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: issuerId, claimId: 'claim1', amount: claimAmount } });
+
+  const secret = 'a real, random secret — this is what goes in the QR code';
+  const voucherAddress = await deriveVoucherAddress(secret);
+
+  // Issuing needs NO new protocol: an ordinary, already-existing signed
+  // transfer, just addressed to the hash of a secret instead of a real identity.
+  const issueTransfer = await buildSignedTransferEvent({ claimId: 'claim1', from: issuerId, to: voucherAddress }, issuer.seed, issuer.pubkeyBytes);
+  s = await applyWalletEvent(rewardParams, s, { id: 'issue', parents: ['c1'], payload: { type: 'transfer', ...issueTransfer } });
+  assert.equal(spendableClaims(s, voucherAddress).length, 1, 'the value is real and owned by the voucher address — nobody\'s root key can sign for it');
+
+  const voucherClaimId = spendableClaims(s, voucherAddress)[0].id;
+  const redeem = await buildSignedVoucherRedeemEvent({ claimId: voucherClaimId, secret, to: redeemerId }, redeemer.seed, redeemer.pubkeyBytes);
+  s = await applyWalletEvent(rewardParams, s, { id: 'redeem', parents: ['issue'], payload: { type: 'voucher-redeem', ...redeem } });
+
+  assert.equal(spendableClaims(s, redeemerId).length, 1);
+  assert.equal(spendableClaims(s, redeemerId)[0].amount, toUnits(claimAmount));
+  assert.equal(spendableClaims(s, voucherAddress).length, 0, 'the voucher is spent — nothing left to redeem again');
+});
+
+test('SECURITY: redeeming with the wrong secret has no real effect', async () => {
+  const issuer = makeSigner();
+  const issuerId = await deriveId(issuer.pubkeyBytes);
+  const attacker = makeSigner();
+  const attackerId = await deriveId(attacker.pubkeyBytes);
+
+  const { state } = await readyToClaimDomain(issuerId);
+  const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, issuerId));
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: issuerId, claimId: 'claim1', amount: claimAmount } });
+
+  const voucherAddress = await deriveVoucherAddress('the real secret');
+  const issueTransfer = await buildSignedTransferEvent({ claimId: 'claim1', from: issuerId, to: voucherAddress }, issuer.seed, issuer.pubkeyBytes);
+  s = await applyWalletEvent(rewardParams, s, { id: 'issue', parents: ['c1'], payload: { type: 'transfer', ...issueTransfer } });
+  const voucherClaimId = spendableClaims(s, voucherAddress)[0].id;
+
+  const guess = await buildSignedVoucherRedeemEvent({ claimId: voucherClaimId, secret: 'a guessed, wrong secret', to: attackerId }, attacker.seed, attacker.pubkeyBytes);
+  s = await applyWalletEvent(rewardParams, s, { id: 'redeem', parents: ['issue'], payload: { type: 'voucher-redeem', ...guess } });
+
+  assert.equal(spendableClaims(s, attackerId).length, 0, 'a wrong secret must never redeem real value');
+  assert.equal(spendableClaims(s, voucherAddress).length, 1, 'the voucher is untouched, still redeemable by whoever really knows the secret');
+});
+
+test('SECURITY: the real "only once" property — two real redeemers racing for the same secret, only the first applied wins', async () => {
+  const issuer = makeSigner();
+  const issuerId = await deriveId(issuer.pubkeyBytes);
+  const alice = makeSigner();
+  const aliceId = await deriveId(alice.pubkeyBytes);
+  const bob = makeSigner();
+  const bobId = await deriveId(bob.pubkeyBytes);
+
+  const { state } = await readyToClaimDomain(issuerId);
+  const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, issuerId));
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: issuerId, claimId: 'claim1', amount: claimAmount } });
+
+  const secret = 'shown once, in one QR code';
+  const voucherAddress = await deriveVoucherAddress(secret);
+  const issueTransfer = await buildSignedTransferEvent({ claimId: 'claim1', from: issuerId, to: voucherAddress }, issuer.seed, issuer.pubkeyBytes);
+  s = await applyWalletEvent(rewardParams, s, { id: 'issue', parents: ['c1'], payload: { type: 'transfer', ...issueTransfer } });
+  const voucherClaimId = spendableClaims(s, voucherAddress)[0].id;
+
+  // Both scanned the identical QR — both real, both signed by a real,
+  // distinct key, both genuinely knowing the real secret.
+  const aliceRedeem = await buildSignedVoucherRedeemEvent({ claimId: voucherClaimId, secret, to: aliceId }, alice.seed, alice.pubkeyBytes);
+  const bobRedeem = await buildSignedVoucherRedeemEvent({ claimId: voucherClaimId, secret, to: bobId }, bob.seed, bob.pubkeyBytes);
+
+  s = await applyWalletEvent(rewardParams, s, { id: 'redeem-alice', parents: ['issue'], payload: { type: 'voucher-redeem', ...aliceRedeem } });
+  s = await applyWalletEvent(rewardParams, s, { id: 'redeem-bob', parents: ['redeem-alice'], payload: { type: 'voucher-redeem', ...bobRedeem } });
+
+  assert.equal(spendableClaims(s, aliceId).length, 1, 'alice\'s redemption was applied first — she really gets it');
+  assert.equal(spendableClaims(s, bobId).length, 0, 'bob\'s later redemption of the identical, already-consumed voucher has no real effect');
+});
+
+test('SECURITY: a redeemer cannot claim a voucher into an identity they do not really control', async () => {
+  const issuer = makeSigner();
+  const issuerId = await deriveId(issuer.pubkeyBytes);
+  const attacker = makeSigner();
+  const victim = makeSigner();
+  const victimId = await deriveId(victim.pubkeyBytes);
+
+  const { state } = await readyToClaimDomain(issuerId);
+  const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, issuerId));
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: issuerId, claimId: 'claim1', amount: claimAmount } });
+
+  const secret = 'a real secret the attacker genuinely knows';
+  const voucherAddress = await deriveVoucherAddress(secret);
+  const issueTransfer = await buildSignedTransferEvent({ claimId: 'claim1', from: issuerId, to: voucherAddress }, issuer.seed, issuer.pubkeyBytes);
+  s = await applyWalletEvent(rewardParams, s, { id: 'issue', parents: ['c1'], payload: { type: 'transfer', ...issueTransfer } });
+  const voucherClaimId = spendableClaims(s, voucherAddress)[0].id;
+
+  // Attacker really knows the secret, but signs with their OWN key
+  // while claiming `to: victimId` — trying to redirect the redemption
+  // to a victim's id they don't control (e.g. to frame them, or by a
+  // naive client bug). The signer must really derive the claimed `to`.
+  const forged = await buildSignedVoucherRedeemEvent({ claimId: voucherClaimId, secret, to: victimId }, attacker.seed, attacker.pubkeyBytes);
+  s = await applyWalletEvent(rewardParams, s, { id: 'redeem', parents: ['issue'], payload: { type: 'voucher-redeem', ...forged } });
+
+  assert.equal(spendableClaims(s, victimId).length, 0);
+  assert.equal(spendableClaims(s, voucherAddress).length, 1, 'a redemption with a forged `to` has no real effect — the voucher stays redeemable');
+});
+
+test('SECURITY: a replayed voucher-redeem nonce is rejected', async () => {
+  const issuer = makeSigner();
+  const issuerId = await deriveId(issuer.pubkeyBytes);
+  const redeemer = makeSigner();
+  const redeemerId = await deriveId(redeemer.pubkeyBytes);
+
+  const { state } = await readyToClaimDomain(issuerId);
+  const claimAmount = fromUnits(claimableNow(rewardParams, state.accrual, issuerId));
+  let s = await applyWalletEvent(rewardParams, state, { id: 'c1', parents: [], payload: { type: 'claim', domain: issuerId, claimId: 'claim1', amount: claimAmount } });
+
+  const secret = 'replay test secret';
+  const voucherAddress = await deriveVoucherAddress(secret);
+  const issueTransfer = await buildSignedTransferEvent({ claimId: 'claim1', from: issuerId, to: voucherAddress }, issuer.seed, issuer.pubkeyBytes);
+  s = await applyWalletEvent(rewardParams, s, { id: 'issue', parents: ['c1'], payload: { type: 'transfer', ...issueTransfer } });
+  const voucherClaimId = spendableClaims(s, voucherAddress)[0].id;
+
+  const redeem = await buildSignedVoucherRedeemEvent({ claimId: voucherClaimId, secret, to: redeemerId }, redeemer.seed, redeemer.pubkeyBytes, { nonce: 'fixed' });
+  let once = await applyWalletEvent(rewardParams, s, { id: 'redeem1', parents: ['issue'], payload: { type: 'voucher-redeem', ...redeem } });
+  let twice = await applyWalletEvent(rewardParams, once, { id: 'redeem2', parents: ['redeem1'], payload: { type: 'voucher-redeem', ...redeem } });
+
+  assert.deepEqual(once.conservation, twice.conservation, 'the replayed identical event must never run a second time');
 });
