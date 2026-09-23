@@ -250,6 +250,60 @@ async function verifyVoucherRedemption(event) {
   }
 }
 
+// Redeeming a voucher INTO a delegate's own channel, landing the value
+// in the real OWNER's identity (`to`), not the delegate's own —
+// genuinely different from an ordinary voucher-redeem, which requires
+// the real signer to BE the destination (`deriveId(signerPubkey) === to`,
+// checked above). A session key's own derived id is never the owner's,
+// by construction (a fresh, deterministic keypair — see aiwa-lib's
+// sessionKeypairFor), so plain verifyVoucherRedemption can never accept
+// a delegate's own signature for this. The identical, already-proven
+// delegation (see issueDelegation above) closes that gap: the same two
+// real, separate signatures compose — the one-time delegation itself,
+// plus this specific redemption, signed by the delegate's own key.
+function canonicalDelegatedVoucherRedeemMessage({ claimId, secret, to, delegate, nonce, timestamp }) {
+  return JSON.stringify({ claimId, secret, to, delegate, nonce, timestamp });
+}
+
+/** One real, delegate-signed voucher redemption, landing the value in the real owner's identity (delegation.from) — reuses an already-issued real delegation, never needs the owner's own key again. */
+export async function buildSignedDelegatedVoucherRedeemEvent(delegation, fields, delegateSeed, delegatePubkeyBytes, { now = Date.now(), nonce = crypto.randomUUID() } = {}) {
+  const { ed25519 } = await import('@noble/curves/ed25519.js');
+  const { claimId, secret } = fields;
+  const withMeta = { claimId, secret, to: delegation.from, delegate: delegation.delegate, nonce, timestamp: now };
+  const signature = ed25519.sign(new TextEncoder().encode(canonicalDelegatedVoucherRedeemMessage(withMeta)), delegateSeed);
+  return {
+    ...withMeta,
+    ownerPubkey: delegation.ownerPubkey,
+    delegationSignature: delegation.delegationSignature,
+    signerPubkey: toHex(delegatePubkeyBytes),
+    signature: toHex(signature),
+  };
+}
+
+async function verifyDelegatedVoucherRedemption(event) {
+  const { ed25519 } = await import('@noble/curves/ed25519.js');
+  const { claimId, secret, to, delegate, nonce, timestamp, ownerPubkey, delegationSignature, signerPubkey, signature } = event;
+
+  if ((await deriveId(fromHex(ownerPubkey))) !== to) return false; // the redemption's own real destination must really derive from the embedded owner pubkey
+  if (toHex(fromHex(signerPubkey)) !== delegate) return false; // the redemption's own real signer must be exactly the delegated key, not anyone else
+
+  let delegationValid;
+  try {
+    delegationValid = ed25519.verify(fromHex(delegationSignature), new TextEncoder().encode(canonicalDelegationMessage({ delegate, from: to })), fromHex(ownerPubkey));
+  } catch {
+    return false;
+  }
+  if (!delegationValid) return false; // the real owner never actually authorized this delegate
+
+  let redeemSigValid;
+  try {
+    redeemSigValid = ed25519.verify(fromHex(signature), new TextEncoder().encode(canonicalDelegatedVoucherRedeemMessage({ claimId, secret, to, delegate, nonce, timestamp })), fromHex(signerPubkey));
+  } catch {
+    return false;
+  }
+  return redeemSigValid; // the delegate really signed THIS specific redemption, not a replay of a differently-addressed one
+}
+
 export async function applyWalletEvent(rewardParams, state, event, verifyFn, contractVerifiers = {}) {
   const payload = event.payload;
   if (!payload || typeof payload.type !== 'string') return state;
@@ -358,6 +412,28 @@ export async function applyWalletEvent(rewardParams, state, event, verifyFn, con
       return { ...state, conservation, usedNonces: { ...state.usedNonces, [nonce]: true } };
     } catch (e) {
       return reject(e.message); // covers both a wrong secret (claim.owner mismatch inside proveTransfer) AND a real double-redemption race (deactivate() on an already-consumed claim)
+    }
+  }
+
+  // The identical delegation already used for delegated-transfer/split,
+  // reused here so a channel can redeem a voucher landing the value in
+  // the real owner's identity, never the delegate's own.
+  if (payload.type === 'delegated-voucher-redeem') {
+    const { claimId, secret, to, delegate, nonce, timestamp, ownerPubkey, delegationSignature, signerPubkey, signature } = payload;
+    const reject = (reason) => ({ ...state, rejections: [...state.rejections, { eventId: event.id, reason }] });
+    if (![claimId, secret, to, delegate, nonce, ownerPubkey, delegationSignature, signerPubkey, signature].every((v) => typeof v === 'string' && v)) {
+      return reject('malformed delegated-voucher-redeem payload');
+    }
+    if (state.usedNonces[nonce]) return reject('nonce already used');
+    if (!(await verifyDelegatedVoucherRedemption({ claimId, secret, to, delegate, nonce, timestamp, ownerPubkey, delegationSignature, signerPubkey, signature }))) {
+      return reject('invalid delegated redeemer signature');
+    }
+    try {
+      const from = await deriveVoucherAddress(secret);
+      const { state: conservation } = transfer(state.conservation, { claimId, from, to, n: 0, derivation: 'identity' }, derivations);
+      return { ...state, conservation, usedNonces: { ...state.usedNonces, [nonce]: true } };
+    } catch (e) {
+      return reject(e.message);
     }
   }
 

@@ -106,6 +106,15 @@ of it, for exactly this reason.
   straight out of `conservation.js`'s own existing single-writer
   invariant (`deactivate()` throws on an already-consumed claim) — no
   new double-spend logic was needed to get that property.
+  `buildSignedDelegatedVoucherRedeemEvent`/`'delegated-voucher-redeem'`
+  extends the identical delegation mechanism below to redemption too:
+  a channel's own session key can redeem a voucher, and the value still
+  lands in the real owner's identity (`delegation.from`), never the
+  delegate's own — the same two-signature composition
+  (`delegated-transfer` already uses), since an ordinary
+  `verifyVoucherRedemption` requires the real signer to derive the
+  claimed destination directly, which a session key never does by
+  construction.
 - **Trust and rate** (`causal-tick.js`, `relative-rate.js`) — a
   weighted-median "Causal Tick" (what other domains, weighted by
   committed capital, corroborate about a domain's position) and a
@@ -257,10 +266,28 @@ this project's own test suite.
 - `solana-wallet.js`'s BIP39 test vectors and `wesolowski-vdf.js`'s RSA-2048
   modulus are exactly what they were in the source this was ported from,
   cross-checked the same way (see each file's own header).
+- **`'claim'` and `'accrual'` events are not signer-scoped at the
+  reducer level** — found directly, not assumed, while investigating
+  whether a channel's delegated session key could already submit a
+  claim: `adapt-event.js`'s `toReducerEvent` strips `author` before any
+  reducer ever sees an event (by design, so reducers stay pure), and
+  neither `applyWalletEvent`'s `'claim'` case nor `applyAccrualEvent`'s
+  checks `payload.domain` against who actually signed the outer
+  envelope. Confirmed concretely: a completely unrelated identity, with
+  no delegation and no relationship to the owner, can sign and submit a
+  real `'claim'` event naming someone else's domain, and it is honored
+  exactly as if the owner had submitted it themselves. This cannot
+  steal value (the resulting claim is still owned by the named domain,
+  spendable only by its real key) — but it does mean *anyone* can
+  trigger a domain's claim and, as a side effect, reset that domain's
+  own patience clock (`lastActionEpoch`) without consent, a real,
+  narrow griefing vector against the `T` (patience) bonus. Not
+  addressed here — out of scope for this pass, flagged honestly rather
+  than silently left undocumented.
 
 ## Status
 
-340 passing `node --test` cases (339 pure-JS, plus a real Rust build+run
+344 passing `node --test` cases (343 pure-JS, plus a real Rust build+run
 cross-check when `cargo` is available — see above). Self-contained —
 the only external dependencies are `@noble/curves`, `@noble/hashes`,
 `@scure/bip39`, and an optional `@solana/web3.js` peer dependency.
