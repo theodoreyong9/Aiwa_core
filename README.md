@@ -77,7 +77,10 @@ of it, for exactly this reason.
 - **Progression, reward, accrual, conservation, wallet** — the economic
   core: a domain's VDF-bound progression epoch (real event builders must
   route parents through `progressionParents(heads, lastId)` — see
-  "Checkpoints" below for the real bug that omitting it causes), a
+  "Checkpoints" below for the real bug that omitting it causes — and
+  build the payload with `buildSignedProgressionEvent`, requiring a real
+  Ed25519 signature proving the signer controls the named domain — see
+  "Honest limits" below for the real griefing vector this closed), a
   reproducible Q128 reward formula, position/patience accounting
   (`'accrual'`/`'claim'`, each
   requiring a real Ed25519 signature proving the signer controls the
@@ -417,10 +420,36 @@ all) should call `materializeWalletFromWireEvents` instead.
   already use: a channel's session key can trigger a claim, and the
   claimed value still lands under the real owner's domain
   (`delegation.from`), never the delegate's own.
+- **FIXED, PREVIOUSLY UNDOCUMENTED: `'progression'` events had the
+  identical class of gap, found the same way while building
+  checkpoints — verified with the same discipline: not assumed, checked
+  against the real, concrete consequence.** `progression.js`'s own
+  causal-chain and epoch checks never verified who really signed the
+  event; `vdfSeed(domain, previousOutput)` is a public, deterministic
+  function of values already visible to anyone watching the log, so
+  anyone — not just the domain owner — could compute the exact same
+  next-epoch `vdfOutput` and publish it as a real, valid `'progression'`
+  event for that domain. Not a theft (the resulting epoch is exactly
+  what the real owner's own hardware would have produced) — but it let
+  anyone advance a domain's own `qTotal` (`reward.js`'s own `domainAge`,
+  the denominator reference, which never resets) without consent, at
+  zero cost beyond the real, sequential VDF work itself. Verified
+  directly against `reward.js`'s own real formula, not asserted: `reward
+  (b=100, q=1, qTotal, T=0)` drops from ≈0.087 at `qTotal=1` to ≈0.0097
+  at `qTotal=20000` — a real, permanent, ~9x reduction in a domain's own
+  future reward per accrual, imposed by a third party for free, since
+  `domainAge` never resets. **Fixed**: `progression.js` now requires a
+  real Ed25519 signature on every `'progression'` payload, checked with
+  the identical `deriveId(signerPubkey) === domain` discipline as
+  `'claim'`/`'accrual'` — see `buildSignedProgressionEvent` and its
+  matching `verifyProgressionAuthorization`. Every real progression
+  builder in this codebase (`aiwa-lib`'s own `advanceProgress()`
+  included) now signs; `progression.test.mjs`'s own `SECURITY:` tests
+  cover a forged-domain progression event being rejected.
 
 ## Status
 
-322 passing `node --test` cases (321 pure-JS, plus a real Rust build+run
+323 passing `node --test` cases (322 pure-JS, plus a real Rust build+run
 cross-check when `cargo` is available — see above). Self-contained —
 the only external dependencies are `@noble/curves`, `@noble/hashes`,
 `@scure/bip39`, and an optional `@solana/web3.js` peer dependency.

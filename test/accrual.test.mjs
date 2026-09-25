@@ -7,6 +7,7 @@ import {
   initialAccrualState, applyAccrualEvent, materializeAccrual, claimableNow,
   buildSignedAccrualEvent, buildSignedClaimEvent,
 } from '../src/accrual.js';
+import { buildSignedProgressionEvent } from '../src/progression.js';
 import { fromUnits } from '../src/units.js';
 
 const rewardParams = { alpha: 1.1, beta: 2.2, gamma: 3, C: Math.pow(33, 3), minQ: 1 };
@@ -34,6 +35,9 @@ async function claim(state, amount, { id, parents = [] } = {}) {
   return applyAccrualEvent(rewardParams, state, { id, parents, payload: { type: 'claim', ...signed } });
 }
 
+// forDomain is always the shared `domain` above in every real call site
+// here, so domainSigner is really the correct — and only — signer able
+// to produce a progression event that verifies for it.
 async function advanceEpochs(state, forDomain, count) {
   const current = state.progression.domains[forDomain] ?? { epoch: 0, vdfOutput: null, lastId: null };
   let epoch = current.epoch;
@@ -44,7 +48,8 @@ async function advanceEpochs(state, forDomain, count) {
     const seed = vdfSeed(forDomain, previousOutput);
     const vdfOutput = await computeVdfChain(seed, 50);
     const id = `${forDomain}-p${epoch}`;
-    const ev = { id, parents: lastId ? [lastId] : [], payload: { type: 'progression', domain: forDomain, epoch, vdfIterations: 50, vdfOutput } };
+    const signed = await buildSignedProgressionEvent({ domain: forDomain, epoch, vdfIterations: 50, vdfOutput }, domainSigner.seed, domainSigner.pubkeyBytes);
+    const ev = { id, parents: lastId ? [lastId] : [], payload: { type: 'progression', ...signed } };
     state = await applyAccrualEvent(rewardParams, state, ev);
     lastId = id;
     previousOutput = vdfOutput;
@@ -173,7 +178,8 @@ test('materializeAccrual folds a real sequence end to end', async () => {
     const seed = vdfSeed(domain, previousOutput);
     const vdfOutput = await computeVdfChain(seed, 50);
     const id = `p${e}`;
-    events.push({ id, parents: lastId ? [lastId] : [], payload: { type: 'progression', domain, epoch: e, vdfIterations: 50, vdfOutput } });
+    const signedProgression = await buildSignedProgressionEvent({ domain, epoch: e, vdfIterations: 50, vdfOutput }, domainSigner.seed, domainSigner.pubkeyBytes);
+    events.push({ id, parents: lastId ? [lastId] : [], payload: { type: 'progression', ...signedProgression } });
     lastId = id;
     previousOutput = vdfOutput;
   }

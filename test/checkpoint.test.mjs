@@ -8,7 +8,7 @@ import { computeVdfChain, vdfSeed } from '../src/vdf.js';
 import { initialWalletState, materializeWallet, materializeWalletFromWireEvents } from '../src/wallet.js';
 import { buildSignedAccrualEvent } from '../src/accrual.js';
 import { toReducerEvents } from '../src/adapt-event.js';
-import { progressionParents } from '../src/progression.js';
+import { progressionParents, buildSignedProgressionEvent } from '../src/progression.js';
 import {
   serializeWalletState, deserializeWalletState, buildCheckpointEvent,
   verifyCheckpoint, checkpointWalletState, findLatestCheckpoint, applyCheckpointEvent,
@@ -112,7 +112,8 @@ test('THE REAL BUG FOUND VIA aiwa-lib: materializeWalletFromWireEvents repoints 
   // real way (progressionParents against the now-correct lastId) must
   // be a real, appendable event — no dangling reference to the pruned one.
   const newHeads = await log.head();
-  const nextPayload = { domain, epoch: run.epoch + 1, vdfIterations: 30, vdfOutput: await computeVdfChain(vdfSeed(domain, run.output), 30) };
+  const nextVdfOutput = await computeVdfChain(vdfSeed(domain, run.output), 30);
+  const nextPayload = await buildSignedProgressionEvent({ domain, epoch: run.epoch + 1, vdfIterations: 30, vdfOutput: nextVdfOutput }, owner.seed, owner.pubkeyBytes);
   const parents = progressionParents(newHeads, foldedState.accrual.progression.domains[domain].lastId);
   assert.deepEqual(parents, newHeads, 'the checkpoint is already the head — nothing dangling left to re-declare');
   const nextEvent = await createEvent(owner.identity, { domain: 'aiwa', parents, type: 'progression', payload: nextPayload });
@@ -142,7 +143,8 @@ async function appendProgressionRun(log, owner, domain, resumeParent, lastProgre
     epoch += 1;
     const vdfOutput = await computeVdfChain(vdfSeed(domain, output), 30);
     const parents = i === 0 ? progressionParents(resumeParent ? [resumeParent] : [], lastId) : [lastId];
-    const ev = await createEvent(owner.identity, { domain: 'aiwa', parents, type: 'progression', payload: { domain, epoch, vdfIterations: 30, vdfOutput } });
+    const signedPayload = await buildSignedProgressionEvent({ domain, epoch, vdfIterations: 30, vdfOutput }, owner.seed, owner.pubkeyBytes);
+    const ev = await createEvent(owner.identity, { domain: 'aiwa', parents, type: 'progression', payload: signedPayload });
     await log.append(ev);
     lastId = ev.id;
     output = vdfOutput;

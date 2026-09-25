@@ -11,6 +11,7 @@ import {
   deriveVoucherAddress, buildSignedVoucherRedeemEvent, buildSignedDelegatedVoucherRedeemEvent,
 } from '../src/wallet.js';
 import { buildSignedAccrualEvent, buildSignedClaimEvent, buildSignedDelegatedClaimEvent } from '../src/accrual.js';
+import { buildSignedProgressionEvent } from '../src/progression.js';
 import { toUnits, fromUnits } from '../src/units.js';
 
 const rewardParams = { alpha: 1.1, beta: 2.2, gamma: 3, C: Math.pow(33, 3), minQ: 1 };
@@ -21,7 +22,8 @@ function makeSigner() {
   return { seed, pubkeyBytes };
 }
 
-async function advanceEpochs(state, domain, count) {
+async function advanceEpochs(state, signer, count) {
+  const domain = await deriveId(signer.pubkeyBytes);
   const current = state.accrual.progression.domains[domain] ?? { epoch: 0, vdfOutput: null, lastId: null };
   let epoch = current.epoch;
   let previousOutput = current.vdfOutput ?? 'genesis';
@@ -31,7 +33,8 @@ async function advanceEpochs(state, domain, count) {
     const seed = vdfSeed(domain, previousOutput);
     const vdfOutput = await computeVdfChain(seed, 50);
     const id = `${domain}-p${epoch}-${crypto.randomUUID()}`;
-    state = await applyWalletEvent(rewardParams, state, { id, parents: lastId ? [lastId] : [], payload: { type: 'progression', domain, epoch, vdfIterations: 50, vdfOutput } });
+    const signedProgression = await buildSignedProgressionEvent({ domain, epoch, vdfIterations: 50, vdfOutput }, signer.seed, signer.pubkeyBytes);
+    state = await applyWalletEvent(rewardParams, state, { id, parents: lastId ? [lastId] : [], payload: { type: 'progression', ...signedProgression } });
     lastId = id;
     previousOutput = vdfOutput;
   }
@@ -40,11 +43,11 @@ async function advanceEpochs(state, domain, count) {
 
 async function readyToClaimDomain(signer, epochs = 5, b = 10) {
   const domain = await deriveId(signer.pubkeyBytes);
-  let state = await advanceEpochs(initialWalletState(), domain, epochs);
+  let state = await advanceEpochs(initialWalletState(), signer, epochs);
   const accrualId = crypto.randomUUID();
   const signedAccrual = await buildSignedAccrualEvent({ domain, b }, signer.seed, signer.pubkeyBytes);
   state = await applyWalletEvent(rewardParams, state, { id: accrualId, parents: [], payload: { type: 'accrual', ...signedAccrual } });
-  state = await advanceEpochs(state, domain, epochs);
+  state = await advanceEpochs(state, signer, epochs);
   return { state, lastId: accrualId };
 }
 
@@ -174,7 +177,8 @@ test('materializeWallet folds a real, complete sequence end to end', async () =>
     const seed = vdfSeed(aliceId, previousOutput);
     const vdfOutput = await computeVdfChain(seed, 50);
     const id = `p${e}`;
-    events.push({ id, parents: lastId ? [lastId] : [], payload: { type: 'progression', domain: aliceId, epoch: e, vdfIterations: 50, vdfOutput } });
+    const signedProgression = await buildSignedProgressionEvent({ domain: aliceId, epoch: e, vdfIterations: 50, vdfOutput }, alice.seed, alice.pubkeyBytes);
+    events.push({ id, parents: lastId ? [lastId] : [], payload: { type: 'progression', ...signedProgression } });
     lastId = id;
     previousOutput = vdfOutput;
   }
@@ -190,14 +194,16 @@ test('THE REAL INCREMENTAL CATCH-UP PROPERTY: applying only newly-arrived events
 
   // Two real, causally-independent domains — the real scenario a
   // real P2P sync or file import would bring in together.
-  for (const domain of ['domainA', 'domainB']) {
+  for (const signer of [makeSigner(), makeSigner()]) {
+    const domain = await deriveId(signer.pubkeyBytes);
     let previousOutput = 'genesis';
     let lastId = null;
     for (let e = 1; e <= 3; e++) {
       const seed = vdfSeed(domain, previousOutput);
       const vdfOutput = await computeVdfChain(seed, 30);
       const id = `${domain}-e${e}`;
-      events.push({ id, parents: lastId ? [lastId] : [], payload: { type: 'progression', domain, epoch: e, vdfIterations: 30, vdfOutput } });
+      const signedProgression = await buildSignedProgressionEvent({ domain, epoch: e, vdfIterations: 30, vdfOutput }, signer.seed, signer.pubkeyBytes);
+      events.push({ id, parents: lastId ? [lastId] : [], payload: { type: 'progression', ...signedProgression } });
       lastId = id;
       previousOutput = vdfOutput;
     }
