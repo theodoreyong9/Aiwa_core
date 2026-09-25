@@ -13,6 +13,33 @@ export function initialProgressionState() {
   return { domains: {}, rejections: [] };
 }
 
+/**
+ * The real parent set a NEW progression event for a domain must declare.
+ *
+ * applyProgressionEvent's own causal-chain check below requires the
+ * domain's last accepted progression event id to be a DIRECT parent —
+ * not just a transitive ancestor. `heads` (a log's own current heads,
+ * the parents every other real event builder in this codebase uses)
+ * only satisfies that for free when nothing else was published for
+ * this domain since the last progression tick. The moment any other
+ * event (an accrual, a claim, a checkpoint...) becomes the sole head in
+ * between — a completely ordinary sequence, e.g. recordCommitment()
+ * right before advanceProgress() — `heads` alone silently drops the
+ * chain, and every progression event from then on is permanently
+ * rejected as "not chained", since the reducer's own lastId can then
+ * never again match a real parent.
+ *
+ * Real fix, not a verification workaround: a progression event
+ * genuinely does have two real causal dependencies — the log's current
+ * tip, AND its own type's last accepted transition — so it should
+ * honestly declare both as parents (a real merge, not a forced choice).
+ * Any real progression-event builder should route its parents through
+ * this, rather than reimplementing the same rule.
+ */
+export function progressionParents(heads, lastId) {
+  return lastId && !heads.includes(lastId) ? [...heads, lastId] : heads;
+}
+
 // verifyFn defaults to the real, main-thread verifyVdfChain — every
 // existing call site, and this project's own Node-based test suite,
 // keeps working unchanged. A caller with access to a real worker

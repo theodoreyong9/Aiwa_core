@@ -75,8 +75,11 @@ of it, for exactly this reason.
   package's own `identity.js` `Identity` — same seed, so a domain built
   here can sign events and capabilities directly.
 - **Progression, reward, accrual, conservation, wallet** — the economic
-  core: a domain's VDF-bound progression epoch, a reproducible Q128 reward
-  formula, position/patience accounting (`'accrual'`/`'claim'`, each
+  core: a domain's VDF-bound progression epoch (real event builders must
+  route parents through `progressionParents(heads, lastId)` — see
+  "Checkpoints" below for the real bug that omitting it causes), a
+  reproducible Q128 reward formula, position/patience accounting
+  (`'accrual'`/`'claim'`, each
   requiring a real Ed25519 signature proving the signer controls the
   named domain — see `buildSignedAccrualEvent`/`buildSignedClaimEvent`
   in `accrual.js`, and "Honest limits" below for the real gap this
@@ -311,7 +314,35 @@ domain should simply not prune.
 Verified directly: `test/checkpoint.test.mjs`'s own "prune-and-resume"
 property — materializing from a checkpoint plus only the events after
 it produces the identical resulting state a continuous, never-pruned
-replay of the same real history would.
+replay of the same real history would (both sides now assert the real
+expected epoch directly, not just equality against each other — see
+the bug below, which an equality-only version of this same test would
+have silently passed while masking).
+
+**A real bug found and fixed while building this.** A checkpoint's own
+embedded `progression.domains[domain].lastId` names whichever
+progression event was last accepted *before* the checkpoint — an event
+`pruneBeforeCheckpoint` is free to delete once the checkpoint exists.
+`checkpointWalletState()` now repoints it to the checkpoint's own real
+id, since that event becomes the domain's new causal frontier the
+moment it's appended (`EventLog.head()` naturally rolls forward to it).
+
+That fix then exposed a second, unrelated, pre-existing bug — not
+specific to checkpoints at all: `progression.js`'s causal-chain check
+requires the domain's last accepted progression event to be a *direct*
+parent, but every real event builder in this codebase (including
+`aiwa-lib`'s own `advanceProgress()`) sets parents to the log's current
+heads alone. The instant any other event (a `recordCommitment()`, a
+checkpoint) becomes the sole head in between — an entirely ordinary
+sequence — that direct link silently breaks, and every progression
+event from then on is permanently rejected. The check itself is
+correct and intentionally strict (see `progression.test.mjs`'s own
+fork-rejection tests); the real fix belongs at construction time, not
+in the verification logic: the new `progressionParents(heads, lastId)`
+helper honestly declares *both* of a progression event's real causal
+dependencies — the log's current tip, and its own type's last accepted
+transition — as parents, a real merge rather than a forced choice. Any
+real progression-event builder should route its parents through it.
 
 ## Honest limits
 
@@ -362,7 +393,7 @@ replay of the same real history would.
 
 ## Status
 
-318 passing `node --test` cases (317 pure-JS, plus a real Rust build+run
+320 passing `node --test` cases (319 pure-JS, plus a real Rust build+run
 cross-check when `cargo` is available — see above). Self-contained —
 the only external dependencies are `@noble/curves`, `@noble/hashes`,
 `@scure/bip39`, and an optional `@solana/web3.js` peer dependency.

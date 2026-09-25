@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { computeVdfChain, vdfSeed, verifyVdfChain } from '../src/vdf.js';
-import { initialProgressionState, applyProgressionEvent, materializeProgression } from '../src/progression.js';
+import { initialProgressionState, applyProgressionEvent, materializeProgression, progressionParents } from '../src/progression.js';
 
 async function progressionPayload(domain, epoch, previousOutput = 'genesis', iterations = 50) {
   const seed = vdfSeed(domain, previousOutput);
@@ -167,4 +167,36 @@ test('SECURITY: with an explicit null verifyFn, a real, invalid VDF proof is sti
   const state = await applyProgressionEvent(initialProgressionState(), { id: 'e1', parents: [], payload: fake }, null);
   assert.equal(state.rejections.length, 1);
   assert.match(state.rejections[0].reason, /VDF proof does not verify/);
+});
+
+test('progressionParents: adds lastId only when heads do not already carry it, never duplicates', () => {
+  assert.deepEqual(progressionParents(['h1'], null), ['h1'], 'nothing to add for a domain\'s first-ever progression event');
+  assert.deepEqual(progressionParents(['h1'], 'h1'), ['h1'], 'already the head — must not duplicate');
+  assert.deepEqual(progressionParents(['h1'], 'p0'), ['h1', 'p0'], 'something else intervened — the real last progression id must be added back in');
+  assert.deepEqual(progressionParents(['h1', 'p0'], 'p0'), ['h1', 'p0'], 'already present among multiple heads — must not duplicate');
+});
+
+test('THE REAL REGRESSION FOUND AND CLOSED: a progression event still chains correctly after an unrelated event (e.g. an accrual) became the log head in between — the exact real sequence recordCommitment() then advanceProgress() produces', async () => {
+  const domain = 'd';
+  let state = initialProgressionState();
+
+  const p1 = await progressionPayload(domain, 1);
+  state = await applyProgressionEvent(state, { id: 'prog1', parents: [], payload: p1 });
+  assert.equal(state.domains[domain].epoch, 1);
+
+  // An unrelated, non-progression event becomes the log's sole head —
+  // exactly what recordCommitment() does in real usage. progression.js
+  // never even sees it (non-progression events pass through unchanged),
+  // but a REAL event builder must still route parents through
+  // progressionParents(), using the domain's real current head plus its
+  // own real last accepted progression id.
+  const realHeadsAfterAccrual = ['accrual1'];
+
+  const p2 = await progressionPayload(domain, 2, p1.vdfOutput);
+  const parents = progressionParents(realHeadsAfterAccrual, state.domains[domain].lastId);
+  assert.deepEqual(parents, ['accrual1', 'prog1'], 'must explicitly restore the real chain to the last progression event');
+  state = await applyProgressionEvent(state, { id: 'prog2', parents, payload: p2 });
+
+  assert.equal(state.domains[domain].epoch, 2, 'must NOT get stuck at epoch 1 — this is the real bug that was found and fixed');
+  assert.equal(state.rejections.length, 0);
 });

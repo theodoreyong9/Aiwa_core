@@ -70,10 +70,39 @@ export function verifyCheckpoint(event) {
   return !!event && event.type === 'checkpoint' && !!event.payload && event.author === event.payload.domain;
 }
 
-/** The real, materialized wallet state a valid checkpoint embeds, or null if `event` is not a real, self-authored checkpoint. */
+/**
+ * The real, materialized wallet state a valid checkpoint embeds, or null
+ * if `event` is not a real, self-authored checkpoint.
+ *
+ * One real rewrite happens here: the embedded state's own
+ * accrual.progression.domains[domain].lastId still names whichever
+ * progression event was last accepted BEFORE the checkpoint was built —
+ * an event pruneBeforeCheckpoint is free to delete once this checkpoint
+ * exists. Once appended, the checkpoint itself becomes the domain's new
+ * causal frontier (EventLog.head() rolls forward to it, so every later
+ * progression event's own `parents` correctly names the checkpoint's
+ * id, not the old, possibly-pruned one) — so lastId is repointed to
+ * event.id here, to match the frontier the rest of the log will
+ * actually chain from. Everything else in the embedded state (epoch,
+ * vdfOutput, balances, positions...) is real, already-verified history
+ * and is returned untouched.
+ */
 export function checkpointWalletState(event) {
   if (!verifyCheckpoint(event)) return null;
-  return deserializeWalletState(event.payload.walletState);
+  const state = deserializeWalletState(event.payload.walletState);
+  const domain = event.payload.domain;
+  const position = state.accrual?.progression?.domains?.[domain];
+  if (!position) return state;
+  return {
+    ...state,
+    accrual: {
+      ...state.accrual,
+      progression: {
+        ...state.accrual.progression,
+        domains: { ...state.accrual.progression.domains, [domain]: { ...position, lastId: event.id } },
+      },
+    },
+  };
 }
 
 /** The most recent real, self-authored checkpoint for `domain` in `log`, or null if none exists yet. A linear scan — checkpoints are rare, deliberate, occasional events, never a per-transaction cost, so this is never the hot path materializeWallet's own per-call cost lives on. */

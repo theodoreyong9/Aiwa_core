@@ -8,6 +8,7 @@ import { computeVdfChain, vdfSeed } from '../src/vdf.js';
 import { initialWalletState, materializeWallet } from '../src/wallet.js';
 import { buildSignedAccrualEvent } from '../src/accrual.js';
 import { toReducerEvents } from '../src/adapt-event.js';
+import { progressionParents } from '../src/progression.js';
 import {
   serializeWalletState, deserializeWalletState, buildCheckpointEvent,
   verifyCheckpoint, checkpointWalletState, findLatestCheckpoint,
@@ -64,14 +65,26 @@ test('a non-checkpoint event is never mistaken for one', async () => {
   assert.equal(checkpointWalletState(event), null);
 });
 
-async function appendProgressionRun(log, owner, domain, parentId, previousOutput, startEpoch, count) {
-  let lastId = parentId;
+/**
+ * Appends `count` real progression events, exactly the way real
+ * production code (aiwa-lib's advanceProgress()) does: parents are the
+ * log's own real current heads (`resumeParent`, e.g. an intervening
+ * accrual or checkpoint event — whatever is actually last in the log),
+ * PLUS — via progressionParents() — the domain's own real last accepted
+ * progression id (`lastProgressionId`), so the causal-chain check in
+ * progression.js keeps passing even when something else was published
+ * for this domain since. Only the FIRST event of a run needs that;
+ * every event after it is a pure progression-to-progression chain.
+ */
+async function appendProgressionRun(log, owner, domain, resumeParent, lastProgressionId, previousOutput, startEpoch, count) {
+  let lastId = lastProgressionId;
   let epoch = startEpoch;
   let output = previousOutput;
   for (let i = 0; i < count; i++) {
     epoch += 1;
     const vdfOutput = await computeVdfChain(vdfSeed(domain, output), 30);
-    const ev = await createEvent(owner.identity, { domain: 'aiwa', parents: lastId ? [lastId] : [], type: 'progression', payload: { domain, epoch, vdfIterations: 30, vdfOutput } });
+    const parents = i === 0 ? progressionParents(resumeParent ? [resumeParent] : [], lastId) : [lastId];
+    const ev = await createEvent(owner.identity, { domain: 'aiwa', parents, type: 'progression', payload: { domain, epoch, vdfIterations: 30, vdfOutput } });
     await log.append(ev);
     lastId = ev.id;
     output = vdfOutput;
@@ -92,11 +105,11 @@ test('THE REAL PRUNE-AND-RESUME PROPERTY: materializing from a checkpoint + only
   const log = new EventLog();
 
   // A real, mixed history: progression, a real signed accrual, more progression.
-  let run = await appendProgressionRun(log, owner, domain, null, 'genesis', 0, 5);
+  let run = await appendProgressionRun(log, owner, domain, null, null, 'genesis', 0, 5);
   const realAccrual = await buildSignedAccrualEvent({ domain, b: 100 }, owner.seed, owner.pubkeyBytes);
   const accrualEvent = await createEvent(owner.identity, { domain: 'aiwa', parents: [run.lastId], type: 'accrual', payload: realAccrual });
   await log.append(accrualEvent);
-  run = await appendProgressionRun(log, owner, domain, accrualEvent.id, run.output, run.epoch, 5);
+  run = await appendProgressionRun(log, owner, domain, accrualEvent.id, run.lastId, run.output, run.epoch, 5);
 
   // The real state right here — this is what the checkpoint will embed.
   const stateAtCheckpoint = await fullReplayOf(log);
@@ -106,8 +119,14 @@ test('THE REAL PRUNE-AND-RESUME PROPERTY: materializing from a checkpoint + only
   });
   await log.append(checkpointEvent);
 
-  // More real history after the checkpoint.
-  run = await appendProgressionRun(log, owner, domain, checkpointEvent.id, run.output, run.epoch, 5);
+  // More real history after the checkpoint. In the real (unpruned) DAG
+  // this baseline replays, the checkpoint event itself never updates
+  // progression.domains[domain].lastId (it's a no-op payload.type to
+  // every reducer) — so the true chain-from id here is still the real
+  // pre-checkpoint progression event (run.lastId from the prior run),
+  // exactly like real production code would see before ever consulting
+  // a checkpoint.
+  run = await appendProgressionRun(log, owner, domain, checkpointEvent.id, run.lastId, run.output, run.epoch, 5);
 
   // The real, independent baseline: a full replay of the identical, still-unpruned log.
   const expectedFinal = await fullReplayOf(log);
@@ -129,6 +148,16 @@ test('THE REAL PRUNE-AND-RESUME PROPERTY: materializing from a checkpoint + only
     .filter((e) => e.id !== checkpointEvent.id);
   remainingEvents.sort((a, b) => a.createdAt - b.createdAt);
   const resumed = await materializeWallet(rewardParams, toReducerEvents(remainingEvents), null, undefined, {}, base);
+
+  // Real expected values asserted directly (not just equality against
+  // `expectedFinal`) — 15 real progression events were appended above
+  // (5 + 5 + 5), and a baseline that were ALSO silently stuck partway
+  // would make an equality-only check pass while masking a real bug,
+  // exactly what happened here before progressionParents() existed.
+  assert.equal(expectedFinal.accrual.progression.domains[domain].epoch, 15, 'the unpruned baseline itself must really reach epoch 15');
+  assert.equal(expectedFinal.accrual.progression.rejections.length, 0, 'the unpruned baseline must have zero real rejections');
+  assert.equal(resumed.accrual.progression.domains[domain].epoch, 15);
+  assert.equal(resumed.accrual.progression.rejections.length, 0);
 
   assert.equal(resumed.accrual.progression.domains[domain].epoch, expectedFinal.accrual.progression.domains[domain].epoch);
   assert.equal(resumed.accrual.positions[domain].b, expectedFinal.accrual.positions[domain].b);

@@ -41,7 +41,7 @@ export {
   issueHardwareRoot, bindHardwareRoot, verifyHardwareAttestation, isIndependenceAttested, MIN_INDEPENDENT_ROOTS,
 } from './hardware-attestation.js';
 
-export { initialProgressionState, applyProgressionEvent, materializeProgression } from './progression.js';
+export { initialProgressionState, applyProgressionEvent, materializeProgression, progressionParents } from './progression.js';
 export { RewardError, rewardFixed, reward, elapsedEpochs, domainAge } from './reward.js';
 export {
   initialAccrualState, applyAccrualEvent, materializeAccrual, claimableNow,
