@@ -89,7 +89,10 @@ export function verifyCheckpoint(event) {
  */
 export function checkpointWalletState(event) {
   if (!verifyCheckpoint(event)) return null;
-  const state = deserializeWalletState(event.payload.walletState);
+  return repointLastId(deserializeWalletState(event.payload.walletState), event);
+}
+
+function repointLastId(state, event) {
   const domain = event.payload.domain;
   const position = state.accrual?.progression?.domains?.[domain];
   if (!position) return state;
@@ -103,6 +106,25 @@ export function checkpointWalletState(event) {
       },
     },
   };
+}
+
+/**
+ * Folds a real checkpoint event into wallet state that is ALREADY in
+ * progress — as opposed to checkpointWalletState(), which builds a
+ * fresh base FROM a checkpoint alone (the cold-load / fresh-peer path).
+ * A checkpoint appended mid-session (the domain's own client, still
+ * running, having just called checkpoint() then pruneBeforeCheckpoint())
+ * is otherwise an inert pass-through to every reducer — nothing would
+ * ever repoint that already-cached state's own lastId away from the
+ * now-pruned event it still names, and the very next progression event
+ * would then try to declare that deleted event as a real parent (via
+ * progressionParents) and fail to append. Routing EVERY checkpoint
+ * fold — cold-load and incremental alike — through this one function
+ * keeps that repointing correct regardless of which path produced it.
+ */
+export function applyCheckpointEvent(state, event) {
+  if (!verifyCheckpoint(event)) return state;
+  return repointLastId(state, event);
 }
 
 /** The most recent real, self-authored checkpoint for `domain` in `log`, or null if none exists yet. A linear scan — checkpoints are rare, deliberate, occasional events, never a per-transaction cost, so this is never the hot path materializeWallet's own per-call cost lives on. */

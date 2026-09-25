@@ -11,7 +11,7 @@ export { defaultKvMaterializer } from './materializer.js';
 export { DataStore } from './data-store.js';
 export {
   serializeWalletState, deserializeWalletState, buildCheckpointEvent,
-  verifyCheckpoint, checkpointWalletState, findLatestCheckpoint,
+  verifyCheckpoint, checkpointWalletState, findLatestCheckpoint, applyCheckpointEvent,
 } from './checkpoint.js';
 
 export { toReducerEvent, toReducerEvents } from './adapt-event.js';
@@ -53,7 +53,7 @@ export {
 } from './conservation.js';
 export {
   initialWalletState, buildSignedTransferEvent, buildSignedSplitEvent, applyWalletEvent,
-  materializeWallet, spendableClaims, totalBalance,
+  materializeWallet, materializeWalletFromWireEvents, spendableClaims, totalBalance,
   issueDelegation, buildSignedDelegatedTransferEvent, buildSignedDelegatedSplitEvent,
   deriveVoucherAddress, buildSignedVoucherRedeemEvent, buildSignedDelegatedVoucherRedeemEvent,
 } from './wallet.js';

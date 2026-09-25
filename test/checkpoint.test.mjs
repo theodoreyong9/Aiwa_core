@@ -5,13 +5,13 @@ import { EventLog } from '../src/event-log.js';
 import { generateIdentity, identityFromSecretKey } from '../src/identity.js';
 import { createEvent } from '../src/event.js';
 import { computeVdfChain, vdfSeed } from '../src/vdf.js';
-import { initialWalletState, materializeWallet } from '../src/wallet.js';
+import { initialWalletState, materializeWallet, materializeWalletFromWireEvents } from '../src/wallet.js';
 import { buildSignedAccrualEvent } from '../src/accrual.js';
 import { toReducerEvents } from '../src/adapt-event.js';
 import { progressionParents } from '../src/progression.js';
 import {
   serializeWalletState, deserializeWalletState, buildCheckpointEvent,
-  verifyCheckpoint, checkpointWalletState, findLatestCheckpoint,
+  verifyCheckpoint, checkpointWalletState, findLatestCheckpoint, applyCheckpointEvent,
 } from '../src/checkpoint.js';
 
 const rewardParams = { alpha: 1.1, beta: 2.2, gamma: 3, C: Math.pow(33, 3), minQ: 1 };
@@ -63,6 +63,64 @@ test('a non-checkpoint event is never mistaken for one', async () => {
   const event = await createEvent(identity, { domain: 'aiwa', parents: [], type: 'transfer', payload: { domain: identity.id } });
   assert.equal(verifyCheckpoint(event), false);
   assert.equal(checkpointWalletState(event), null);
+});
+
+test('applyCheckpointEvent leaves state untouched for a forged checkpoint, or one naming a domain with no progression state yet', async () => {
+  const attacker = await generateIdentity();
+  const state = initialWalletState();
+  const forged = await createEvent(attacker, {
+    domain: 'aiwa', parents: [], type: 'checkpoint',
+    payload: { domain: 'someone-else', coveredHeads: [], walletState: serializeWalletState(state) },
+  });
+  assert.equal(applyCheckpointEvent(state, forged), state);
+
+  const identity = await generateIdentity();
+  const real = await buildCheckpointEvent(identity, { logDomain: 'aiwa', parents: [], coveredHeads: [], walletState: state });
+  assert.equal(applyCheckpointEvent(state, real), state, 'nothing to repoint for a domain materializeWallet has never seen a progression event for');
+});
+
+test('THE REAL BUG FOUND VIA aiwa-lib: materializeWalletFromWireEvents repoints lastId for a checkpoint folded mid-stream (an already-cached wallet, not a fresh checkpointWalletState() load) — plain materializeWallet cannot, since it never sees the real, un-adapted event.author a checkpoint needs', async () => {
+  const owner = await realOwner();
+  const domain = owner.identity.id;
+  const log = new EventLog();
+
+  const run = await appendProgressionRun(log, owner, domain, null, null, 'genesis', 0, 3);
+  const cachedState = await fullReplayOf(log); // the exact shape an already-running AIWA instance's own in-memory cache is in
+  assert.equal(cachedState.accrual.progression.domains[domain].lastId, run.lastId);
+
+  const heads = await log.head();
+  const checkpointEvent = await buildCheckpointEvent(owner.identity, {
+    logDomain: 'aiwa', parents: heads, coveredHeads: heads, walletState: cachedState,
+  });
+  await log.append(checkpointEvent);
+  await log.pruneBeforeCheckpoint(checkpointEvent.id);
+  assert.equal(await log.has(run.lastId), false, 'the real event the cached state still names as lastId is really gone now');
+
+  // materializeWallet alone — the plain, already-adapted-events path —
+  // can NEVER fix this: toReducerEvent already stripped event.author by
+  // the time it sees anything, so verifyCheckpoint can't possibly pass.
+  const brokenFold = await materializeWallet(rewardParams, toReducerEvents([checkpointEvent]), null, undefined, {}, cachedState);
+  assert.equal(brokenFold.accrual.progression.domains[domain].lastId, run.lastId, 'proof plain materializeWallet leaves the dangling reference exactly as it was');
+
+  // materializeWalletFromWireEvents, given the REAL, un-adapted event,
+  // repoints lastId on its own — the exact fold path _materializeWallet()'s
+  // incremental cache-hit branch takes in real usage.
+  const foldedState = await materializeWalletFromWireEvents(rewardParams, [checkpointEvent], null, undefined, {}, cachedState);
+  assert.equal(foldedState.accrual.progression.domains[domain].lastId, checkpointEvent.id);
+
+  // The real, practical consequence: a new progression event built the
+  // real way (progressionParents against the now-correct lastId) must
+  // be a real, appendable event — no dangling reference to the pruned one.
+  const newHeads = await log.head();
+  const nextPayload = { domain, epoch: run.epoch + 1, vdfIterations: 30, vdfOutput: await computeVdfChain(vdfSeed(domain, run.output), 30) };
+  const parents = progressionParents(newHeads, foldedState.accrual.progression.domains[domain].lastId);
+  assert.deepEqual(parents, newHeads, 'the checkpoint is already the head — nothing dangling left to re-declare');
+  const nextEvent = await createEvent(owner.identity, { domain: 'aiwa', parents, type: 'progression', payload: nextPayload });
+  await assert.doesNotReject(log.append(nextEvent), 'must be a real, appendable event, never referencing a pruned parent');
+
+  const finalState = await materializeWalletFromWireEvents(rewardParams, [nextEvent], null, undefined, {}, foldedState);
+  assert.equal(finalState.accrual.progression.domains[domain].epoch, run.epoch + 1);
+  assert.equal(finalState.accrual.progression.rejections.length, 0);
 });
 
 /**

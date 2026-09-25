@@ -10,6 +10,8 @@ import { applyAccrualEvent, initialAccrualState, claimableNow } from './accrual.
 import { initialConservationState, issueClaim, transfer, splitClaim, identityDerivation } from './conservation.js';
 import { deriveId } from './identity.js';
 import { toUnits } from './units.js';
+import { applyCheckpointEvent, verifyCheckpoint } from './checkpoint.js';
+import { toReducerEvents } from './adapt-event.js';
 
 const derivations = { identity: identityDerivation };
 
@@ -312,6 +314,19 @@ export async function applyWalletEvent(rewardParams, state, event, verifyFn, con
     return { ...state, accrual: await applyAccrualEvent(rewardParams, state.accrual, event, verifyFn) };
   }
 
+  // A checkpoint is never handled HERE: applyWalletEvent only ever sees
+  // events already adapted by toReducerEvent, which deliberately strips
+  // event.author (every other type embeds its own signature INSIDE
+  // payload instead — see accrual.js's buildSignedAccrualEvent/
+  // buildSignedClaimEvent — a checkpoint is the one type that doesn't,
+  // by design; see checkpoint.js's header). verifyCheckpoint needs the
+  // real, un-adapted wire event to mean anything. See
+  // materializeWalletFromWireEvents below for the real, correct way to
+  // fold a batch that might contain one.
+  if (payload.type === 'checkpoint') {
+    return state;
+  }
+
   // 'delegated-claim' shares this exact body: the discriminating
   // verification (domain-owner signature vs. a delegate's, proven
   // against an embedded real delegation) happens entirely inside
@@ -496,6 +511,48 @@ export async function materializeWallet(rewardParams, orderedEvents, onProgress,
     if (onProgress && i % 20 === 0) onProgress(i + 1, orderedEvents.length);
   }
   if (onProgress) onProgress(orderedEvents.length, orderedEvents.length);
+  return state;
+}
+
+/**
+ * Like materializeWallet, but takes RAW, pre-adaptation wire events
+ * (event.js's own {id, domain, author, authorPublicKey, parents, type,
+ * payload, createdAt, signature} shape — e.g. straight from
+ * collectAncestors/EventLog.get, before toReducerEvent) instead of
+ * already-adapted ones.
+ *
+ * The one real reason this needs to exist, rather than everyone just
+ * calling materializeWallet(rewardParams, toReducerEvents(events), ...)
+ * directly: a real checkpoint's authenticity (verifyCheckpoint) reads
+ * event.author straight off the wire event, which toReducerEvent
+ * deliberately strips before any reducer ever sees it. Folding a batch
+ * that might contain a checkpoint — whether starting fresh from genesis
+ * or resuming an already-cached base — needs that check to genuinely
+ * run at the checkpoint's own real position in the sequence, and needs
+ * applyCheckpointEvent's own repoint of progression's lastId to
+ * actually happen there too; materializeWallet alone can only ever see
+ * a checkpoint as an inert pass-through.
+ */
+export async function materializeWalletFromWireEvents(rewardParams, events, onProgress, verifyFn, contractVerifiers = {}, baseState) {
+  let state = baseState ?? initialWalletState();
+  let segment = [];
+  const flushSegment = async () => {
+    if (segment.length === 0) return;
+    state = await materializeWallet(rewardParams, toReducerEvents(segment), null, verifyFn, contractVerifiers, state);
+    segment = [];
+  };
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i];
+    if (verifyCheckpoint(event)) {
+      await flushSegment();
+      state = applyCheckpointEvent(state, event);
+    } else {
+      segment.push(event);
+    }
+    if (onProgress && i % 20 === 0) onProgress(i + 1, events.length);
+  }
+  await flushSegment();
+  if (onProgress) onProgress(events.length, events.length);
   return state;
 }
 

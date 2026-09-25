@@ -344,6 +344,33 @@ dependencies — the log's current tip, and its own type's last accepted
 transition — as parents, a real merge rather than a forced choice. Any
 real progression-event builder should route its parents through it.
 
+Fixing that then surfaced a *third* bug, in the fix for the first one.
+`checkpointWalletState()`'s repoint only ever runs on a **cold load** —
+`findLatestCheckpoint`'s raw wire event, read before any peer has
+materialized anything. An already-running wallet that itself just
+called `checkpoint()` then pruned never goes through that path: its own
+in-memory cached state gets the checkpoint folded into it directly, and
+`applyWalletEvent` — the reducer `materializeWallet` actually calls —
+can never verify a checkpoint at all, because it only ever sees events
+already adapted by `toReducerEvent`, which deliberately strips
+`event.author` (every other type embeds its own signature *inside*
+payload instead, exactly so it survives that stripping — see
+`buildSignedAccrualEvent`/`buildSignedClaimEvent` — a checkpoint is the
+one type that doesn't, by design). So a checkpoint folded this way was
+silently treated as an inert no-op, `lastId` stayed pointed at the now
+-pruned event, and `progressionParents()` would try to re-declare that
+deleted event as a parent on the very next progression event — a real,
+now-unappendable event. New `materializeWalletFromWireEvents()` is the
+real fix: it takes **raw**, pre-adaptation wire events (exactly what
+`collectAncestors`/`EventLog.get` already return), so a checkpoint's
+authenticity can genuinely be checked at its own real position in the
+sequence, folding in `applyCheckpointEvent`'s repoint right there
+before continuing the ordinary, adapted reducer chain for everything
+else. `materializeWallet` itself is unchanged and still correct for
+batches that never contain a checkpoint; any caller whose batch might
+contain one (any consumer resuming from a log that uses checkpoints at
+all) should call `materializeWalletFromWireEvents` instead.
+
 ## Honest limits
 
 - `identity-cost.test.mjs`'s incremental-catch-up test and
@@ -393,7 +420,7 @@ real progression-event builder should route its parents through it.
 
 ## Status
 
-320 passing `node --test` cases (319 pure-JS, plus a real Rust build+run
+322 passing `node --test` cases (321 pure-JS, plus a real Rust build+run
 cross-check when `cargo` is available — see above). Self-contained —
 the only external dependencies are `@noble/curves`, `@noble/hashes`,
 `@scure/bip39`, and an optional `@solana/web3.js` peer dependency.
