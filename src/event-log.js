@@ -6,6 +6,7 @@
 // or care which real backend is in use.
 
 import { verifyEvent } from './event.js';
+import { verifyCheckpoint } from './checkpoint.js';
 
 /** A real, minimal storage contract any real backend must satisfy. */
 export function createMemoryBackend() {
@@ -15,6 +16,7 @@ export function createMemoryBackend() {
     async getEvent(id) { return events.get(id) ?? null; },
     async hasEvent(id) { return events.has(id); },
     async allIds() { return [...events.keys()]; },
+    async deleteEvent(id) { events.delete(id); },
   };
 }
 
@@ -57,6 +59,15 @@ export function createIndexedDbBackend(dbName = 'aiwa-core-event-log') {
         req.onerror = () => reject(req.error);
       });
     },
+    async deleteEvent(id) {
+      const db = await openDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('events', 'readwrite');
+        tx.objectStore('events').delete(id);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    },
   };
 }
 
@@ -73,10 +84,47 @@ export class EventLog {
     // shortcut, no exception.
     const verification = await verifyEvent(event);
     if (!verification.valid) throw new Error(`Cannot append: real event ${event.id} failed real verification — ${verification.reason}`);
-    for (const p of event.parents) {
-      if (!(await this.backend.hasEvent(p))) throw new Error(`Cannot append: real parent ${p} is not yet known — request it first.`);
+    // A real, narrow exception: a genuine, self-authored checkpoint
+    // (see checkpoint.js) is the one event type ever allowed to name
+    // parents this log does not have — exactly the state a brand-new
+    // peer is in right after receiving a pruned domain's own log
+    // (pruneBeforeCheckpoint below deletes what the checkpoint's own
+    // embedded state already accounts for, including its own real
+    // parents). verifyCheckpoint already demands the real signer be
+    // the domain it summarizes, so this is never a generic bypass.
+    if (!verifyCheckpoint(event)) {
+      for (const p of event.parents) {
+        if (!(await this.backend.hasEvent(p))) throw new Error(`Cannot append: real parent ${p} is not yet known — request it first.`);
+      }
     }
     await this.backend.putEvent(event);
+  }
+
+  /**
+   * Physically deletes every real event `checkpoint`'s own embedded
+   * state already accounts for — the checkpoint event itself is kept,
+   * becoming the new logical root of this log's own local storage.
+   * Bounds the unbounded local-storage growth a continuously-running
+   * domain otherwise accumulates forever. See checkpoint.js's own
+   * header for the real, honest tradeoff this makes (a peer who never
+   * saw the pruned events can no longer independently re-verify them
+   * from genesis — only trust this checkpoint's own real signature).
+   */
+  async pruneBeforeCheckpoint(checkpointEventId) {
+    const checkpoint = await this.get(checkpointEventId);
+    if (!checkpoint) throw new Error(`pruneBeforeCheckpoint: checkpoint ${checkpointEventId} is not in this log.`);
+    if (!verifyCheckpoint(checkpoint)) throw new Error(`pruneBeforeCheckpoint: ${checkpointEventId} is not a real, self-authored checkpoint.`);
+    const toDelete = new Set();
+    const stack = [...checkpoint.payload.coveredHeads];
+    while (stack.length > 0) {
+      const id = stack.pop();
+      if (toDelete.has(id) || id === checkpointEventId) continue;
+      toDelete.add(id);
+      const event = await this.get(id);
+      if (event) stack.push(...event.parents);
+    }
+    for (const id of toDelete) await this.backend.deleteEvent(id);
+    return toDelete.size;
   }
 
   async appendMany(events) {
@@ -89,8 +137,8 @@ export class EventLog {
       progressed = false;
       for (let i = pending.length - 1; i >= 0; i--) {
         const ev = pending[i];
-        const parentsKnown = await Promise.all(ev.parents.map((p) => this.backend.hasEvent(p)));
-        if (parentsKnown.every(Boolean)) {
+        const parentsKnown = verifyCheckpoint(ev) || (await Promise.all(ev.parents.map((p) => this.backend.hasEvent(p)))).every(Boolean);
+        if (parentsKnown) {
           await this.append(ev);
           pending.splice(i, 1);
           progressed = true;

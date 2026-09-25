@@ -9,6 +9,10 @@ export { createEvent, verifyEvent, computeEventId } from './event.js';
 export { EventLog, createMemoryBackend, createIndexedDbBackend } from './event-log.js';
 export { defaultKvMaterializer } from './materializer.js';
 export { DataStore } from './data-store.js';
+export {
+  serializeWalletState, deserializeWalletState, buildCheckpointEvent,
+  verifyCheckpoint, checkpointWalletState, findLatestCheckpoint,
+} from './checkpoint.js';
 
 export { toReducerEvent, toReducerEvents } from './adapt-event.js';
 

@@ -53,8 +53,10 @@ of it, for exactly this reason.
   travels inside the event, checked against the claimed author id, so
   `EventLog.append()` never trusts an unverified event regardless of
   source); a deliberately "stupid" `EventLog` (memory or IndexedDB
-  backend); a `DataStore` — a rebuildable projection over the log via a
-  pluggable `Materializer`, never itself the source of truth.
+  backend, both supporting real deletion via `pruneBeforeCheckpoint` —
+  see "Checkpoints" below); a `DataStore` — a rebuildable projection
+  over the log via a pluggable `Materializer`, never itself the source
+  of truth.
 - **Math primitives** (`bigint-math.js`, `fixed-point-math.js`, `units.js`) —
   deterministic BigInt modular exponentiation, primality testing, and a Q128
   fixed-point `ln`/`exp`/`pow` that agrees bit-for-bit across runtimes,
@@ -261,6 +263,56 @@ here before this. Skips gracefully (never fails) if no Rust toolchain
 toolchain is a real, honest absence, never grounds to fail the rest of
 this project's own test suite.
 
+## Checkpoints — bounding unbounded local storage
+
+A continuously-running domain accumulates one event per real
+progression epoch plus one per real economic action, forever — a real,
+previously-documented, previously-unaddressed limit (Yellow Paper
+§12.1). `checkpoint.js` closes it: a real, self-signed event
+(`buildCheckpointEvent`) embedding a domain's own already-materialized
+wallet state (BigInt-safe serialization — claim amounts and accrual
+balances round-trip exactly, never coerced through a lossy float), as
+of a real, specific set of log heads (`coveredHeads`).
+
+**Signer-scoped from the start, not fixed after the fact.**
+`verifyCheckpoint` demands `event.author === event.payload.domain` —
+the identical class of gap `accrual.js`'s own `'claim'`/`'accrual'`
+signer-scoping fix closed (see below), applied here from day one
+rather than discovered later. `EventLog.append()` already guarantees
+`event.author` genuinely derives from `event.authorPublicKey` before
+any event is ever stored, so no separate embedded signature is needed
+here the way `'claim'`/`'accrual'` need one — a checkpoint is read
+directly off the real wire event, before `adapt-event.js`'s own
+`toReducerEvent` ever strips `author`.
+
+**`EventLog.pruneBeforeCheckpoint(checkpointId)`** physically deletes
+every real event a valid checkpoint's own embedded state already
+accounts for, keeping only the checkpoint itself as the new logical
+root. A brand-new peer receiving a pruned log needs the one, narrow
+exception `EventLog.append()` now makes: a real, valid checkpoint may
+be appended even though its own declared parents are unknown — the
+identical situation that peer is genuinely in.
+
+**HONEST LIMIT, stated plainly, not hidden.** A checkpoint only ever
+lets a domain vouch for *its own* real past. A peer who already
+independently verified everything up to a checkpoint loses nothing by
+trusting it afterward — it is genuinely their own, already-verified
+work, summarized. A brand-new peer who receives *only* a pruned log,
+never having seen the original history, can no longer independently
+re-derive that summarized state from genesis; they trade full
+independent verifiability for a real, signed assertion by the domain's
+own key about its own past. That tradeoff is inherent to any
+checkpoint/pruning scheme — the identical one Ethereum's own
+weak-subjectivity checkpoints make — not a flaw specific to this
+implementation. A peer that needs full independent verification should
+fetch the pre-pruned history from a peer that still holds it, or the
+domain should simply not prune.
+
+Verified directly: `test/checkpoint.test.mjs`'s own "prune-and-resume"
+property — materializing from a checkpoint plus only the events after
+it produces the identical resulting state a continuous, never-pruned
+replay of the same real history would.
+
 ## Honest limits
 
 - `identity-cost.test.mjs`'s incremental-catch-up test and
@@ -310,7 +362,7 @@ this project's own test suite.
 
 ## Status
 
-310 passing `node --test` cases (309 pure-JS, plus a real Rust build+run
+318 passing `node --test` cases (317 pure-JS, plus a real Rust build+run
 cross-check when `cargo` is available — see above). Self-contained —
 the only external dependencies are `@noble/curves`, `@noble/hashes`,
 `@scure/bip39`, and an optional `@solana/web3.js` peer dependency.

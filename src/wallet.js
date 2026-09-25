@@ -478,8 +478,19 @@ export async function applyWalletEvent(rewardParams, state, event, verifyFn, con
   return state;
 }
 
-export async function materializeWallet(rewardParams, orderedEvents, onProgress, verifyFn, contractVerifiers = {}) {
-  let state = initialWalletState();
+// `baseState`, if given, is an already-materialized state to fold
+// `orderedEvents` onto instead of starting from genesis — the whole
+// point being that a caller who already materialized a prior prefix of
+// this same domain's log can pass that result back in here along with
+// only the events appended since, instead of paying the full replay
+// cost again on every call. Never validated against `orderedEvents`
+// itself (there is nothing here to check it against) — it is the
+// caller's own responsibility to pass a `baseState` that really is the
+// materialization of every event causally before `orderedEvents[0]`,
+// exactly the same trust a caller already places in itself by choosing
+// which events to pass at all.
+export async function materializeWallet(rewardParams, orderedEvents, onProgress, verifyFn, contractVerifiers = {}, baseState) {
+  let state = baseState ?? initialWalletState();
   for (let i = 0; i < orderedEvents.length; i++) {
     state = await applyWalletEvent(rewardParams, state, orderedEvents[i], verifyFn, contractVerifiers);
     if (onProgress && i % 20 === 0) onProgress(i + 1, orderedEvents.length);
