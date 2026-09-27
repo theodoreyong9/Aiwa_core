@@ -105,7 +105,12 @@ of it, for exactly this reason.
   both the embedded delegation signature and the transfer's own signer
   must be checked separately (skipping either is the identical
   impersonation hole `aiwa-lib`'s own `contract.js` documents for a
-  naively-trusted `payload.from`).
+  naively-trusted `payload.from`). `verifyDelegation(delegation)` checks
+  a delegation object completely standalone — no EventLog, no state —
+  exactly what a real recipient needs to trust a delegation handed to
+  them out of band, before anything referencing it ever reaches their
+  own log (`aiwa-lib`'s own real channel-open handshake is built on
+  this).
 - **A real bearer voucher** (`deriveVoucherAddress`/
   `buildSignedVoucherRedeemEvent`, `'voucher-redeem'`) — a classic
   hash-lock, the same idea a Lightning HTLC or a Bitcoin
@@ -449,7 +454,7 @@ all) should call `materializeWalletFromWireEvents` instead.
 
 ## Status
 
-323 passing `node --test` cases (322 pure-JS, plus a real Rust build+run
+327 passing `node --test` cases (326 pure-JS, plus a real Rust build+run
 cross-check when `cargo` is available — see above). Self-contained —
 the only external dependencies are `@noble/curves`, `@noble/hashes`,
 `@scure/bip39`, and an optional `@solana/web3.js` peer dependency.

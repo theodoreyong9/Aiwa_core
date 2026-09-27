@@ -97,6 +97,27 @@ export async function issueDelegation(ownerSeed, ownerPubkeyBytes, delegatePubke
   return { delegate, from, ownerPubkey: toHex(ownerPubkeyBytes), delegationSignature: toHex(signature) };
 }
 
+/**
+ * Standalone, independently verifiable — true iff `delegation` really
+ * is a one-time delegation `delegation.from` genuinely signed,
+ * authorizing `delegation.delegate` as their own delegate. Needs
+ * nothing but the object itself: no EventLog, no prior state — this is
+ * exactly what a real recipient checks before trusting a delegation
+ * handed to them out of band (a channel-open request, say), before any
+ * event referencing it ever reaches their own log.
+ */
+export async function verifyDelegation(delegation) {
+  const { ed25519 } = await import('@noble/curves/ed25519.js');
+  const { delegate, from, ownerPubkey, delegationSignature } = delegation ?? {};
+  if (![delegate, from, ownerPubkey, delegationSignature].every((v) => typeof v === 'string' && v)) return false;
+  if ((await deriveId(fromHex(ownerPubkey))) !== from) return false;
+  try {
+    return ed25519.verify(fromHex(delegationSignature), new TextEncoder().encode(canonicalDelegationMessage({ delegate, from })), fromHex(ownerPubkey));
+  } catch {
+    return false;
+  }
+}
+
 /** One real, delegate-signed transfer, reusing an already-issued real delegation (see issueDelegation) — this is the repeatable "click" side; it never needs the owner's own key again. */
 export async function buildSignedDelegatedTransferEvent(delegation, fields, delegateSeed, delegatePubkeyBytes, { now = Date.now(), nonce = crypto.randomUUID() } = {}) {
   const { ed25519 } = await import('@noble/curves/ed25519.js');

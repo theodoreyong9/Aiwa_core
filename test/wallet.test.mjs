@@ -7,7 +7,7 @@ import { claimableNow } from '../src/accrual.js';
 import {
   initialWalletState, applyWalletEvent, materializeWallet,
   buildSignedTransferEvent, buildSignedSplitEvent, spendableClaims, totalBalance,
-  issueDelegation, buildSignedDelegatedTransferEvent, buildSignedDelegatedSplitEvent,
+  issueDelegation, verifyDelegation, buildSignedDelegatedTransferEvent, buildSignedDelegatedSplitEvent,
   deriveVoucherAddress, buildSignedVoucherRedeemEvent, buildSignedDelegatedVoucherRedeemEvent,
 } from '../src/wallet.js';
 import { buildSignedAccrualEvent, buildSignedClaimEvent, buildSignedDelegatedClaimEvent } from '../src/accrual.js';
@@ -242,6 +242,36 @@ test('"sign once, click many times": a real delegation lets a delegate key move 
   assert.equal(spendableClaims(s, 'bob').length, 1);
   assert.equal(spendableClaims(s, 'bob')[0].amount, toUnits(claimAmount));
   assert.equal(s.conservation.claims.claim1.status, 'consumed');
+});
+
+test('verifyDelegation: a real delegation verifies standalone, with no EventLog or state at all', async () => {
+  const owner = makeSigner();
+  const delegateKey = makeSigner();
+  const delegation = await issueDelegation(owner.seed, owner.pubkeyBytes, delegateKey.pubkeyBytes);
+  assert.equal(await verifyDelegation(delegation), true);
+});
+
+test('SECURITY: verifyDelegation rejects a delegation forged by the delegate itself, claiming a `from` it never really signed', async () => {
+  const owner = makeSigner();
+  const ownerId = await deriveId(owner.pubkeyBytes);
+  const delegateKey = makeSigner();
+  const forged = { ...(await issueDelegation(delegateKey.seed, delegateKey.pubkeyBytes, delegateKey.pubkeyBytes)), from: ownerId };
+  assert.equal(await verifyDelegation(forged), false);
+});
+
+test('SECURITY: verifyDelegation rejects a real delegation whose signature was tampered with (different delegate substituted after signing)', async () => {
+  const owner = makeSigner();
+  const realDelegate = makeSigner();
+  const impostor = makeSigner();
+  const delegation = await issueDelegation(owner.seed, owner.pubkeyBytes, realDelegate.pubkeyBytes);
+  const tampered = { ...delegation, delegate: (await issueDelegation(owner.seed, owner.pubkeyBytes, impostor.pubkeyBytes)).delegate };
+  assert.equal(await verifyDelegation(tampered), false);
+});
+
+test('verifyDelegation: malformed input is rejected without throwing', async () => {
+  assert.equal(await verifyDelegation(null), false);
+  assert.equal(await verifyDelegation({}), false);
+  assert.equal(await verifyDelegation({ delegate: 'x', from: 'y', ownerPubkey: 'not-hex', delegationSignature: 'also-not-hex' }), false);
 });
 
 test('SECURITY: a delegated transfer with no real delegation ever issued is rejected', async () => {
