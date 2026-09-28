@@ -527,9 +527,21 @@ export async function applyWalletEvent(rewardParams, state, event, verifyFn, con
 // which events to pass at all.
 export async function materializeWallet(rewardParams, orderedEvents, onProgress, verifyFn, contractVerifiers = {}, baseState) {
   let state = baseState ?? initialWalletState();
+  // Throttled by real elapsed time, not a fixed event count: a single
+  // slow event (e.g. a real VDF re-verification, deliberately as
+  // expensive to verify as to produce — see progression.js/vdf.js) can
+  // by itself take far longer than an entire small backlog of cheap
+  // ones. A fixed "every 20 events" cadence would then report ONCE and
+  // go silent until the very end — indistinguishable, to whoever is
+  // watching a real progress bar, from a genuine freeze.
+  let lastReportedAt = 0;
   for (let i = 0; i < orderedEvents.length; i++) {
     state = await applyWalletEvent(rewardParams, state, orderedEvents[i], verifyFn, contractVerifiers);
-    if (onProgress && i % 20 === 0) onProgress(i + 1, orderedEvents.length);
+    const now = Date.now();
+    if (onProgress && (i === 0 || now - lastReportedAt >= 150)) {
+      onProgress(i + 1, orderedEvents.length);
+      lastReportedAt = now;
+    }
   }
   if (onProgress) onProgress(orderedEvents.length, orderedEvents.length);
   return state;
@@ -562,6 +574,9 @@ export async function materializeWalletFromWireEvents(rewardParams, events, onPr
     state = await materializeWallet(rewardParams, toReducerEvents(segment), null, verifyFn, contractVerifiers, state);
     segment = [];
   };
+  // Same real-time throttling as materializeWallet's own loop, and for
+  // the same reason — see its header comment.
+  let lastReportedAt = 0;
   for (let i = 0; i < events.length; i++) {
     const event = events[i];
     if (verifyCheckpoint(event)) {
@@ -570,7 +585,11 @@ export async function materializeWalletFromWireEvents(rewardParams, events, onPr
     } else {
       segment.push(event);
     }
-    if (onProgress && i % 20 === 0) onProgress(i + 1, events.length);
+    const now = Date.now();
+    if (onProgress && (i === 0 || now - lastReportedAt >= 150)) {
+      onProgress(i + 1, events.length);
+      lastReportedAt = now;
+    }
   }
   await flushSegment();
   if (onProgress) onProgress(events.length, events.length);
