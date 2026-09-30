@@ -465,41 +465,54 @@ highest one any observer provably received), a **contradiction** when the target
   with no funded observer at all the proven bound stands alone (the median has no tick then).
 - `accuse = contradicted || forked` — from **proofs only**. The median never accuses: it is an estimate, and
   "far from the median" cannot tell inflation from legitimate offline progress.
-- Both rules see the same events: every progression event of the target that fails the authenticity check
-  (`isAuthentic`, by default the signature check of `progression.js`) is removed first and reported in
-  `rejectedEvents`, so a forged event cannot move either.
+- Both rules see the same events, filtered by what counts as evidence (`verifyChain`, default `'auto'`): when the
+  reader holds the target's history **from epoch 1**, its progression events are *replayed* through the real
+  reducer (`replayProgression`: epoch + 1, chained to the last accepted transition, signed by the domain's key,
+  sequential proof verified) and only the accepted ones count — what anyone who verifies does. Without the genesis
+  nothing can be chained, so it falls back to the signature alone and **says so** (`verification: 'signature'`).
+  Rejected events are reported in `rejectedEvents`. A fork is the one exception, on purpose: a second lineage is
+  rejected by the linear chain and is exactly the evidence of one, so forks are read from the signed events.
 
-Exported from `index.js` as `triangulate`, `judgeSelfReport`, `authenticEvents`, `assessPosition`. **Experimental,
-and not wired into anything else**: `computeCausalTick` is unchanged.
+Exported from `index.js` as `triangulate`, `judgeSelfReport`, `authenticEvents`, `replayProgression`,
+`signatureAuthentic`, `assessPosition`. **Experimental, and not wired into anything else**: `computeCausalTick` is
+unchanged.
+
+**A note on "the target signs a fake itself".** A domain may write whatever it likes in its own log; that is not an
+attack on the protocol, it is an invalid history, and whoever verifies (the sequential proof) refuses it, at
+reconnection as before — the fake stays in the DAG as a dead branch nobody counts. It matters here for one narrow
+reason: `deriveSourceEpochLookup` (Mirror) reads the DAG as it is, so *colluders* can sign commitments citing such an
+event, and a reader who does not replay the chain would take it into the **estimate** (informational, never applied
+to anyone's value). Replaying the chain closes that; a reader without the genesis cannot, and falls back, visibly.
 
 `experiments/triangulation-scenarios.mjs` (run it with `node experiments/triangulation-scenarios.mjs`;
 `test/triangulation.test.mjs` pins the results) runs three rules on the same synthetic worlds — the target's
-events and the observers' commitments are really signed:
+progression events are a real chain (signed, chained, real sequential proofs), the observers' commitments really
+signed:
 
-| World | Weighted median (status quo) | Proofs alone, log trusted | **Combined** |
+| World | Weighted median (status quo) | Proofs alone, log trusted | **Combined** (default) |
 |---|---|---|---|
-| honest | 100 | 100 | 100 |
-| funded majority saw only an old state (10); one honest saw 100 | **10**, accuses the honest domain | 100 | **100** |
-| unfunded observers who saw an old state | 100 | 100 | 100 |
-| *only* unfunded observers, all saw 100 | no tick (⊥) | 100 | **100** |
-| target rewinds to 50; funded majority saw 50; one honest saw 100 | 50, "consistent" | contradicted | **100, accused (rewind)** |
-| target holds two unrelated histories | 100, no notion of a fork | fork | **100, accused (fork)** |
-| observer cites an event that does not exist | 100 | 100 | 100 |
-| only stale observers; target progressed offline to 100 | 10, accused | 10 | 10, *ahead by 90*, not accused |
-| a forged event (signed by someone else) in the log; funded **minority** cites it | 100 | **999999** | **100** |
-| the same, funded **majority** cites it | **999999**, accuses the honest domain | **999999** | **100** |
-| **the target signs a fake far-ahead event itself, no sequential work; funded majority cites it** | **999999** | **999999** | **999999** |
+| honest | 20 | 20 | 20 |
+| funded majority saw only an old state (4); one honest saw 20 | **4**, accuses the honest domain | 20 | **20** |
+| unfunded observers who saw an old state | 20 | 20 | 20 |
+| *only* unfunded observers, all saw 20 | no tick (⊥) | 20 | **20** |
+| target rewinds to 10; funded majority saw 10; one honest saw 20 | 10, "consistent" | contradicted | **20, accused (rewind)** |
+| target holds two unrelated histories at 21 | 21, no notion of a fork | fork | **21, accused (fork)** |
+| observer cites an event that does not exist | 20 | 20 | 20 |
+| only stale observers; target progressed offline to 20 | 4, accused | 4 | 4, *ahead by 16*, not accused |
+| a forged event (signed by someone else) in the log; funded **minority** cites it | 20 | **999999** | **20** |
+| the same, funded **majority** cites it | **999999**, accuses the honest domain | **999999** | **20** |
+| the target signs a fake far-ahead event itself, no sequential work; funded majority cites it | **999999** | **999999** | **20** (chain replayed, fake rejected) |
+| **the same, but the reader holds only epochs 15–20 (no genesis)** | **999999** | **999999** | **999999**, `verification: 'signature'` |
 
-The last row is what the combination does **not** cover: the signature is genuine, so a signature-only check
-accepts it. Admission (`applyProgressionEvent`) checks the sequential proof; a caller who wants that check here
-passes a stricter `isAuthentic`. Other limits, unchanged: no upper bound (being ahead is reported, not accused);
-only as fresh as the freshest honest observer; nothing about whether observers are distinct actors —
-`proof.observers` is informational. Synthetic worlds chosen by their author, not a security proof. See the yellow
-paper, §13.2–§13.3, for the design notes (including what always-on hardware is for).
+The last row is what remains: with colluders, and a reader that cannot replay the chain, the estimate can be
+fooled — and the result says it fell back to the signature. Other limits, unchanged: no upper bound (being ahead is
+reported, not accused); only as fresh as the freshest honest observer; nothing about whether observers are distinct
+actors — `proof.observers` is informational. Synthetic worlds chosen by their author, not a security proof. See the
+yellow paper, §13.2–§13.3, for the design notes (including what always-on hardware is for).
 
 ## Status
 
-337 passing `node --test` cases (336 pure-JS, plus a real Rust build+run
+339 passing `node --test` cases (338 pure-JS, plus a real Rust build+run
 cross-check when `cargo` is available — see above). Self-contained —
 the only external dependencies are `@noble/curves`, `@noble/hashes`,
 `@scure/bip39`, and an optional `@solana/web3.js` peer dependency.

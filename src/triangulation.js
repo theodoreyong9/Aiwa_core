@@ -25,17 +25,20 @@
 //    evidence or withhold it; they cannot forge it.
 //  - It says nothing about whether observers are distinct actors. `observers` counts distinct identities and
 //    is informational only — a coalition inflates it for free. Independence is a separate question.
-//  - It checks the signature on the progression event, not its sequential (VDF) proof: that is
-//    applyProgressionEvent's job at admission, and a caller who wants it here passes it in `isAuthentic`.
+//  - By default it checks the signature on the progression event, not its sequential (VDF) proof; the
+//    chain check (replayProgression) does both, and assessPosition uses it whenever the reader holds the
+//    domain's history from epoch 1.
 //
 // Status: EXPERIMENTAL. Exercised on the synthetic worlds of experiments/triangulation-scenarios.mjs, not on
 // real networks.
 
-import { verifyProgressionAuthorization } from './progression.js';
+import { verifyProgressionAuthorization, applyProgressionEvent, initialProgressionState } from './progression.js';
 
 const ANCESTRY_BOUND = 10000;
 
-const defaultIsAuthentic = (event) => verifyProgressionAuthorization(event.payload);
+/** The default authenticity check: the progression event is signed by the key whose id is its domain. */
+export const signatureAuthentic = (event) => verifyProgressionAuthorization(event.payload);
+const defaultIsAuthentic = signatureAuthentic;
 
 const isProgressionOf = (event, domain) =>
   event?.payload?.type === 'progression' && event.payload.domain === domain && Number.isInteger(event.payload.epoch);
@@ -74,6 +77,30 @@ function isAncestor(byId, ancestorId, descendantId) {
     if (event) queue.push(...event.parents);
   }
   return false;
+}
+
+/**
+ * Replays `domain`'s progression events through the real reducer (applyProgressionEvent: epoch + 1, chained to the
+ * last accepted transition, signed by the domain's key, sequential proof verified) and says which were ACCEPTED.
+ * An event that only carries a genuine signature — e.g. one the domain signed itself, far ahead, with no
+ * sequential work — is rejected here, as it is by anyone who verifies.
+ * `genesis` is true when the reader holds the chain from epoch 1: without it nothing can be chained, so nothing
+ * would be accepted, and the caller should not read that as "everything is forged".
+ * @param {Array<{ id: string, parents: string[], payload: object }>} orderedEvents in topological order
+ * @returns {Promise<{ accepted: Set<string>, genesis: boolean, rejections: object[] }>}
+ */
+export async function replayProgression(orderedEvents, domain, verifyFn) {
+  let state = initialProgressionState();
+  const accepted = new Set();
+  let genesis = false;
+  for (const event of orderedEvents) {
+    if (!isProgressionOf(event, domain)) continue;
+    if (event.payload.epoch === 1) genesis = true;
+    const before = state.rejections.length;
+    state = await applyProgressionEvent(state, event, verifyFn);
+    if (state.rejections.length === before) accepted.add(event.id);
+  }
+  return { accepted, genesis, rejections: state.rejections };
 }
 
 /**
@@ -140,13 +167,13 @@ export async function triangulate(mirrorState, orderedEvents, targetDomain, { is
 /**
  * What the proofs say about the epoch a domain reports for itself.
  * contradicted: it reports less than an observer provably received (its own signed history says otherwise).
- * forked: observers hold two unrelated histories of it.
+ * forked: observers hold two unrelated histories of it (`forks` may come from a separate, signature-level pass).
  * ahead: how far it reports beyond the best proof — normal for offline progress, so never an accusation.
  * @returns {{ contradicted: boolean, forked: boolean, ahead: number | null, lowerBound: number | null, witnesses: object[], forks: object[] }}
  */
-export function judgeSelfReport(selfReportedEpoch, triangulation) {
-  if (!triangulation) return { contradicted: false, forked: false, ahead: null, lowerBound: null, witnesses: [], forks: [] };
-  const { lowerBound, witnesses, forks } = triangulation;
+export function judgeSelfReport(selfReportedEpoch, triangulation, forks = triangulation ? triangulation.forks : []) {
+  if (!triangulation) return { contradicted: false, forked: forks.length > 0, ahead: null, lowerBound: null, witnesses: [], forks };
+  const { lowerBound, witnesses } = triangulation;
   return {
     contradicted: selfReportedEpoch < lowerBound,
     forked: forks.length > 0,
