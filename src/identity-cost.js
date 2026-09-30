@@ -83,3 +83,21 @@ export function registerIdentityCost(state, { domain, tx, minLamports = 0, now =
 export function hasIdentityCost(state, domain) {
   return Boolean(state.registered[domain]);
 }
+
+/**
+ * The state `computeCausalTick` reads, built from COMMITTED CAPITAL instead of from burn proofs: the yellow paper
+ * weights a witness by its `b` (§13: w_i = b_i, §8), and `b` is what each domain signed into its own position
+ * (accrual.js — the reducer has already checked the signature, the domain binding and the nonce). `positions` is
+ * accrual state's `positions`: { [domain]: { b } }, b in whole units (SOL, as AIWA.burn() records it); the result
+ * is in lamports, which is what the causal tick reads.
+ * HONEST LIMIT: `b` is the domain's own signed statement. Nothing here checks it against a Solana burn — that is
+ * verifyBurnProof / registerIdentityCost's job, when a reader has the transaction record.
+ */
+export function identityCostFromCommitments(positions, { lamportsPerUnit = 1_000_000_000 } = {}) {
+  const registered = {};
+  for (const [domain, position] of Object.entries(positions ?? {})) {
+    const lamports = Math.round((position?.b ?? 0) * lamportsPerUnit);
+    if (lamports > 0) registered[domain] = { domain, burnedLamports: lamports, signature: null, registeredAt: null, slot: null };
+  }
+  return { registered, usedSignatures: {} };
+}

@@ -35,7 +35,7 @@ export {
 
 export {
   SOLANA_INCINERATOR_ADDRESS, initialIdentityCostState, linearCostCurve,
-  requiredBurnLamports, verifyBurnProof, registerIdentityCost, hasIdentityCost,
+  requiredBurnLamports, verifyBurnProof, registerIdentityCost, hasIdentityCost, identityCostFromCommitments,
 } from './identity-cost.js';
 export {
   issueHardwareRoot, bindHardwareRoot, verifyHardwareAttestation, isIndependenceAttested, MIN_INDEPENDENT_ROOTS,

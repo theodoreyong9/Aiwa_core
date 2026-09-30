@@ -474,8 +474,14 @@ highest one any observer provably received), a **contradiction** when the target
   rejected by the linear chain and is exactly the evidence of one, so forks are read from the signed events.
 
 Exported from `index.js` as `triangulate`, `judgeSelfReport`, `authenticEvents`, `replayProgression`,
-`signatureAuthentic`, `assessPosition`. **Experimental, and not wired into anything else**: `computeCausalTick` is
-unchanged.
+`signatureAuthentic`, `assessPosition`, and `identityCostFromCommitments` (see below). **Experimental**: `computeCausalTick`
+is unchanged; `aiwa-lib` wires the rest (`observe()`, `position()`).
+
+**Where the weight comes from.** The yellow paper weights a witness by its committed capital (§13: `w_i = b_i`, §8),
+and `b` is what each domain signed into its own position (`accrual.js`: the reducer has already checked signature,
+domain binding and nonce). `identityCostFromCommitments(accrualState.positions)` turns those positions into the state
+`computeCausalTick` reads (whole units ×1e9 → lamports). It is the domain's own signed statement, not a verified burn:
+`verifyBurnProof` / `registerIdentityCost` remain for a reader who holds the transaction record.
 
 **A note on "the target signs a fake itself".** A domain may write whatever it likes in its own log; that is not an
 attack on the protocol, it is an invalid history, and whoever verifies (the sequential proof) refuses it, at
@@ -512,7 +518,7 @@ yellow paper, §13.2–§13.3, for the design notes (including what always-on ha
 
 ## Status
 
-339 passing `node --test` cases (338 pure-JS, plus a real Rust build+run
+341 passing `node --test` cases (340 pure-JS, plus a real Rust build+run
 cross-check when `cargo` is available — see above). Self-contained —
 the only external dependencies are `@noble/curves`, `@noble/hashes`,
 `@scure/bip39`, and an optional `@solana/web3.js` peer dependency.
