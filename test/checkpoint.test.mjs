@@ -14,7 +14,8 @@ import {
   verifyCheckpoint, checkpointWalletState, findLatestCheckpoint, applyCheckpointEvent,
 } from '../src/checkpoint.js';
 
-const rewardParams = { alpha: 1.1, beta: 2.2, gamma: 3, C: Math.pow(33, 3), minQ: 1 };
+// commitmentBacking: 'none' — these tests are not about the burn gate (burn-backed-commitment.test.mjs is)
+const rewardParams = { alpha: 1.1, beta: 2.2, gamma: 3, C: Math.pow(33, 3), minQ: 1, commitmentBacking: 'none' };
 
 function toHex(bytes) {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');

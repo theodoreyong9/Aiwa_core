@@ -101,3 +101,16 @@ export function identityCostFromCommitments(positions, { lamportsPerUnit = 1_000
   }
   return { registered, usedSignatures: {} };
 }
+
+/**
+ * The same state, built from burns THIS READER CONFIRMED (accrual state's `burns`: what 'burn-record' events
+ * pointed at and the reader's own fetch from Solana bore out). This is the certified form of the witness weight;
+ * identityCostFromCommitments is the weaker one, for deployments that opted out of backed commitments.
+ */
+export function identityCostFromBurns(burns) {
+  const registered = {};
+  for (const [domain, lamports] of Object.entries(burns?.covered ?? {})) {
+    if (lamports > 0) registered[domain] = { domain, burnedLamports: lamports, signature: null, registeredAt: null, slot: null };
+  }
+  return { registered, usedSignatures: { ...(burns?.used ?? {}) } };
+}

@@ -150,7 +150,8 @@ test('THE REAL CROSS-RUNTIME PROPERTY: an independent Rust implementation produc
   // real, on-chain AIWA claim (accrual.js), and Math.log/Math.pow
   // carry no such guarantee across runtimes — only +,-,*, and
   // truncating-toward-zero / do.
-  const rewardParams = { alpha: 1.1, beta: 2.2, gamma: 3, C: Math.pow(33, 3), minQ: 1 };
+  // commitmentBacking: 'none' — these tests are not about the burn gate (burn-backed-commitment.test.mjs is)
+const rewardParams = { alpha: 1.1, beta: 2.2, gamma: 3, C: Math.pow(33, 3), minQ: 1, commitmentBacking: 'none' };
   const jsRewardBasic = rewardFixed(10, 5_000_000, 5_000_000, 0.2, rewardParams);
   const jsRewardOneYear = rewardFixed(10, 112_000_000, 112_000_000, 0.2, rewardParams);
   const jsRewardBelowMinQ = rewardFixed(10, 0, 1, 0, rewardParams);

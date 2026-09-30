@@ -35,8 +35,9 @@ export {
 
 export {
   SOLANA_INCINERATOR_ADDRESS, initialIdentityCostState, linearCostCurve,
-  requiredBurnLamports, verifyBurnProof, registerIdentityCost, hasIdentityCost, identityCostFromCommitments,
+  requiredBurnLamports, verifyBurnProof, registerIdentityCost, hasIdentityCost, identityCostFromCommitments, identityCostFromBurns,
 } from './identity-cost.js';
+export { base58Decode, normalizeBurnTransaction, fetchBurnRecord, verifyBurnRecordFor } from './burn-record.js';
 export {
   issueHardwareRoot, bindHardwareRoot, verifyHardwareAttestation, isIndependenceAttested, MIN_INDEPENDENT_ROOTS,
 } from './hardware-attestation.js';
@@ -44,7 +45,7 @@ export {
 export { initialProgressionState, applyProgressionEvent, materializeProgression, progressionParents, buildSignedProgressionEvent } from './progression.js';
 export { RewardError, rewardFixed, reward, elapsedEpochs, domainAge } from './reward.js';
 export {
-  initialAccrualState, applyAccrualEvent, materializeAccrual, claimableNow,
+  initialAccrualState, initialBurnsState, withConfirmedBurns, applyAccrualEvent, materializeAccrual, claimableNow,
   buildSignedAccrualEvent, buildSignedClaimEvent, buildSignedDelegatedClaimEvent,
 } from './accrual.js';
 export {

@@ -34,6 +34,7 @@
 // patience clock (lastActionEpoch below) without consent, a real,
 // narrow griefing vector against the T (patience) bonus in reward.js.
 
+import { verifyBurnRecordFor } from './burn-record.js';
 import { applyProgressionEvent, initialProgressionState } from './progression.js';
 import { rewardFixed, domainAge } from './reward.js';
 import { toUnits, fixedToUnits } from './units.js';
@@ -151,9 +152,19 @@ async function verifyDelegatedClaimAuthorization(event) {
   return claimSigValid; // the delegate really signed THIS specific claim, not a replay of a differently-addressed one
 }
 
-export function initialAccrualState() {
-  return { progression: initialProgressionState(), positions: {}, balances: {}, usedNonces: {}, rejections: [] };
+// burns: what this READER has confirmed about burns. `records` is seeded by the caller (signature -> the
+// record fetchBurnRecord returned: the reader's own check against Solana); `covered` (domain -> lamports) and
+// `used` (signature -> true) are derived by folding 'burn-record' events. A reducer never reaches Solana: what
+// it may count is exactly what the reader put in `records`.
+export function initialBurnsState() {
+  return { records: {}, covered: {}, used: {} };
 }
+
+export function initialAccrualState() {
+  return { progression: initialProgressionState(), positions: {}, balances: {}, usedNonces: {}, rejections: [], burns: initialBurnsState() };
+}
+
+const LAMPORTS_PER_UNIT = 1_000_000_000;
 
 // Straight from rewardFixed()'s own reproducible Q128 BigInt to real
 // on-chain base units — no JS Number in between. This is the actual
@@ -191,10 +202,46 @@ export async function applyAccrualEvent(rewardParams, state, event, verifyFn) {
 
     const currentEpoch = domainAge(state.progression, domain);
     const prior = state.positions[domain] ?? { b: 0, lastActionEpoch: currentEpoch, T: 0 };
+    // The genesis commitment (yellow paper §8): capital is what a burn covers. A domain's total committed `b`
+    // may not exceed what burns THIS READER has confirmed for it (see 'burn-record' below). The deployment may
+    // opt out explicitly — `rewardParams.commitmentBacking: 'none'` — for tests, demos, private economies;
+    // leaving it out means mandatory.
+    if (rewardParams?.commitmentBacking !== 'none') {
+      const covered = state.burns?.covered?.[domain] ?? 0;
+      if (Math.round((prior.b + b) * LAMPORTS_PER_UNIT) > covered) {
+        return reject(`commitment of ${prior.b + b} is not covered by a confirmed burn (${covered} lamports confirmed for this domain)`);
+      }
+    }
     return {
       ...state,
       positions: { ...state.positions, [domain]: { b: prior.b + b, lastActionEpoch: currentEpoch, T: T ?? prior.T } },
       usedNonces: { ...state.usedNonces, [nonce]: true },
+    };
+  }
+
+  // A domain pointing at a burn it made: { type: 'burn-record', domain, signature } — the Solana transaction
+  // signature, nothing else. What the burn was worth is NOT read from the event (anyone can write anything in
+  // an event): it is read from the record this reader fetched from Solana itself (state.burns.records), and the
+  // burn counts for `domain` only if that record is a finalized burn paid by the domain's own key. One
+  // signature counts once.
+  if (payload.type === 'burn-record') {
+    const { domain, signature } = payload;
+    const reject = (reason) => ({ ...state, rejections: [...state.rejections, { eventId: event.id, domain: domain ?? null, reason }] });
+    if (typeof domain !== 'string' || !domain) return reject('missing domain');
+    if (typeof signature !== 'string' || !signature) return reject('missing transaction signature');
+    const burns = state.burns ?? initialBurnsState();
+    if (burns.used[signature]) return reject(`burn ${signature} already counted`);
+    const record = burns.records[signature];
+    if (!record) return reject(`burn ${signature} is not confirmed by this reader (no finalized transaction record)`);
+    const check = await verifyBurnRecordFor(domain, record);
+    if (!check.valid) return reject(check.reason);
+    return {
+      ...state,
+      burns: {
+        ...burns,
+        covered: { ...burns.covered, [domain]: (burns.covered[domain] ?? 0) + record.incineratorBalanceDeltaLamports },
+        used: { ...burns.used, [signature]: true },
+      },
     };
   }
 
@@ -273,4 +320,15 @@ export async function materializeAccrual(rewardParams, orderedEvents, verifyFn) 
 
 export function claimableNow(rewardParams, state, domain) {
   return currentlyClaimableUnits(rewardParams, state, domain);
+}
+
+/**
+ * `walletState` with the burn records a reader has confirmed put where the reducer looks for them
+ * (accrual.burns.records: signature -> fetchBurnRecord's result). Fold 'burn-record' events on top of the state this
+ * returns. Records are added to, never replaced: what was confirmed stays confirmed.
+ */
+export function withConfirmedBurns(walletState, records) {
+  const accrual = walletState.accrual ?? initialAccrualState();
+  const burns = accrual.burns ?? initialBurnsState();
+  return { ...walletState, accrual: { ...accrual, burns: { ...burns, records: { ...burns.records, ...records } } } };
 }

@@ -331,7 +331,7 @@ export async function applyWalletEvent(rewardParams, state, event, verifyFn, con
   const payload = event.payload;
   if (!payload || typeof payload.type !== 'string') return state;
 
-  if (payload.type === 'progression' || payload.type === 'accrual') {
+  if (payload.type === 'progression' || payload.type === 'accrual' || payload.type === 'burn-record') {
     return { ...state, accrual: await applyAccrualEvent(rewardParams, state.accrual, event, verifyFn) };
   }
 

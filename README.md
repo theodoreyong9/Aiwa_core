@@ -452,6 +452,34 @@ all) should call `materializeWalletFromWireEvents` instead.
   included) now signs; `progression.test.mjs`'s own `SECURITY:` tests
   cover a forged-domain progression event being rejected.
 
+## The genesis commitment is backed by a burn — mandatory
+
+The yellow paper (§7–§8) says value creation is "gated at genesis" by an irreversible burn, and accrual is linear in
+the committed capital `b`. Until now the reducers did not enforce it: a domain could sign `b = 1 000 000 000` with no
+burn anywhere and accrue on it (checked: 5 epochs gave 5 087 221 claimable). **Now a commitment is rejected unless
+burns THE READER confirmed cover it**:
+
+- `'burn-record'` event — `{ type, domain, signature }`, the Solana transaction signature and nothing else. The
+  reducer never reads what a burn was worth from the event (anyone can write anything in an event) and never reaches
+  Solana. It reads the record **the reader fetched itself**, seeded in `accrual.burns.records`
+  (`withConfirmedBurns(state, records)`), and counts the burn for `domain` only if that record is a finalized,
+  error-free burn to the incinerator **paid by the domain's own key** and whose payer's balance really went down by
+  what was burned (`verifyBurnRecordFor`). One signature counts once, for one domain. Quoting someone else's
+  signature counts for nothing.
+- `'accrual'` event — the domain's total `b` (×1e9 lamports) may not exceed what confirmed burns cover
+  (`accrual.burns.covered`). Cumulative.
+- `fetchBurnRecord(connection, signature)` asks Solana for the **finalized** transaction and returns the record
+  (`normalizeBurnTransaction` reads legacy and versioned transactions, keys as strings or objects); `null` when Solana
+  does not know it (yet). `identityCostFromBurns(state.accrual.burns)` is then the **certified** witness weight.
+- **Opt-out, explicit**: `rewardParams.commitmentBacking: 'none'` for tests, demos and private economies. Leaving it
+  out means mandatory. This repo's other test suites say so in one line at the top.
+- Deterministic *per reader*: the same log folded with different confirmed records gives different — each correct —
+  results. A reader that cannot reach Solana confirms nothing, so credits no one's commitment until it can; folding
+  again after confirming is what turns a rejected `'accrual'` into an accepted one. That is the paper's one
+  external dependency, not a new one. A checkpoint carries the state, `burns` included.
+- **Not covered**: a burn is confirmed against whichever Solana endpoint the reader asks; a dishonest endpoint is the
+  reader's problem. Commitments made before this rule, in a log without burns, are rejected by a reader who enforces it.
+
 ## Position: proofs and the weighted median, combined (experimental)
 
 `computeCausalTick`'s weighted median is a **vote** (weight = committed capital). A Mirror reception commitment,
@@ -518,7 +546,7 @@ yellow paper, §13.2–§13.3, for the design notes (including what always-on ha
 
 ## Status
 
-341 passing `node --test` cases (340 pure-JS, plus a real Rust build+run
+355 passing `node --test` cases (354 pure-JS, plus a real Rust build+run
 cross-check when `cargo` is available — see above). Self-contained —
 the only external dependencies are `@noble/curves`, `@noble/hashes`,
 `@scure/bip39`, and an optional `@solana/web3.js` peer dependency.

@@ -14,7 +14,8 @@ import { buildSignedAccrualEvent, buildSignedClaimEvent, buildSignedDelegatedCla
 import { buildSignedProgressionEvent } from '../src/progression.js';
 import { toUnits, fromUnits } from '../src/units.js';
 
-const rewardParams = { alpha: 1.1, beta: 2.2, gamma: 3, C: Math.pow(33, 3), minQ: 1 };
+// commitmentBacking: 'none' — these tests are not about the burn gate (burn-backed-commitment.test.mjs is)
+const rewardParams = { alpha: 1.1, beta: 2.2, gamma: 3, C: Math.pow(33, 3), minQ: 1, commitmentBacking: 'none' };
 
 function makeSigner() {
   const seed = ed25519.utils.randomSecretKey();
