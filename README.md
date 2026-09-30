@@ -452,9 +452,37 @@ all) should call `materializeWalletFromWireEvents` instead.
   included) now signs; `progression.test.mjs`'s own `SECURITY:` tests
   cover a forged-domain progression event being rejected.
 
+## Triangulation — a weight-free prototype, and what it found
+
+`src/triangulation.js` is a **prototype**: not exported from `index.js`, not used by `computeCausalTick`. A Mirror
+reception commitment carries a *reference* to an event only the observed domain could have produced, so an
+observation is a proof, not a vote. From proofs alone it derives a **lower bound** on the target's epoch (the
+highest one any observer provably received), a **contradiction** when the target reports less than that, and a
+**fork** when observers hold two events of the target neither of which descends from the other. No weight.
+
+`experiments/triangulation-scenarios.mjs` (run it with `node experiments/triangulation-scenarios.mjs`;
+`test/triangulation.test.mjs` pins the results) runs it and the weighted median side by side on synthetic worlds:
+
+| World | Weighted median | Triangulation |
+|---|---|---|
+| honest | 100 | 100 |
+| funded majority saw only an old state | **10**, accuses the honest domain | 100 |
+| unfunded observers, old state | 100 | 100 |
+| target rewinds; funded majority agrees; one honest saw 100 | 50, "consistent" | **contradicted** |
+| target holds two unrelated histories | 100, no notion of a fork | **fork** |
+| observer cites an event that does not exist | 100 | 100 |
+| only stale observers, target progressed offline | 10, accused | 10, *ahead by 90*, not accused |
+| **a forged event of the target got into the log** | 100 | **999999, fooled** |
+
+The last row is the honest limit: the triangulation trusts the events attributed to the target, so it is only as
+good as the signature and proof check that admits them (`progression.js`); the weighted median does not depend
+on that. It gives no upper bound, it is only as fresh as the freshest honest observer, and it says nothing about
+whether observers are distinct actors — `observers` is informational. Fixtures, not a security proof. See the yellow
+paper, §13.2–§13.3, for the design notes (including what always-on hardware is for).
+
 ## Status
 
-327 passing `node --test` cases (326 pure-JS, plus a real Rust build+run
+336 passing `node --test` cases (335 pure-JS, plus a real Rust build+run
 cross-check when `cargo` is available — see above). Self-contained —
 the only external dependencies are `@noble/curves`, `@noble/hashes`,
 `@scure/bip39`, and an optional `@solana/web3.js` peer dependency.
