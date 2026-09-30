@@ -64,6 +64,8 @@ export {
   deriveSourceEpochLookup, materializeMirror, computeResidualDiversity,
 } from './mirror.js';
 export { computeCausalTick, checkCausalConsistency } from './causal-tick.js';
+export { triangulate, judgeSelfReport, authenticEvents } from './triangulation.js';
+export { assessPosition } from './position.js';
 export {
   buildRateWitness, verifyRateWitness, computeRelativeRate, computeEmergentRate, composeRelativeRates,
 } from './relative-rate.js';

@@ -452,37 +452,54 @@ all) should call `materializeWalletFromWireEvents` instead.
   included) now signs; `progression.test.mjs`'s own `SECURITY:` tests
   cover a forged-domain progression event being rejected.
 
-## Triangulation — a weight-free prototype, and what it found
+## Position: proofs and the weighted median, combined (experimental)
 
-`src/triangulation.js` is a **prototype**: not exported from `index.js`, not used by `computeCausalTick`. A Mirror
-reception commitment carries a *reference* to an event only the observed domain could have produced, so an
-observation is a proof, not a vote. From proofs alone it derives a **lower bound** on the target's epoch (the
+`computeCausalTick`'s weighted median is a **vote** (weight = committed capital). A Mirror reception commitment,
+though, carries a *reference* to an event only the observed domain could have produced, so an observation is
+also a **proof**. `src/triangulation.js` derives from proofs alone a **lower bound** on the target's epoch (the
 highest one any observer provably received), a **contradiction** when the target reports less than that, and a
-**fork** when observers hold two events of the target neither of which descends from the other. No weight.
+**fork** when observers hold two progression events of the target neither of which descends from the other.
+`src/position.js` (`assessPosition`) uses each kind of evidence for what it is good at:
+
+- `position = max(weighted median, proven lower bound)` — the vote is never reported below what is proven, and
+  with no funded observer at all the proven bound stands alone (the median has no tick then).
+- `accuse = contradicted || forked` — from **proofs only**. The median never accuses: it is an estimate, and
+  "far from the median" cannot tell inflation from legitimate offline progress.
+- Both rules see the same events: every progression event of the target that fails the authenticity check
+  (`isAuthentic`, by default the signature check of `progression.js`) is removed first and reported in
+  `rejectedEvents`, so a forged event cannot move either.
+
+Exported from `index.js` as `triangulate`, `judgeSelfReport`, `authenticEvents`, `assessPosition`. **Experimental,
+and not wired into anything else**: `computeCausalTick` is unchanged.
 
 `experiments/triangulation-scenarios.mjs` (run it with `node experiments/triangulation-scenarios.mjs`;
-`test/triangulation.test.mjs` pins the results) runs it and the weighted median side by side on synthetic worlds:
+`test/triangulation.test.mjs` pins the results) runs three rules on the same synthetic worlds — the target's
+events and the observers' commitments are really signed:
 
-| World | Weighted median | Triangulation |
-|---|---|---|
-| honest | 100 | 100 |
-| funded majority saw only an old state | **10**, accuses the honest domain | 100 |
-| unfunded observers, old state | 100 | 100 |
-| target rewinds; funded majority agrees; one honest saw 100 | 50, "consistent" | **contradicted** |
-| target holds two unrelated histories | 100, no notion of a fork | **fork** |
-| observer cites an event that does not exist | 100 | 100 |
-| only stale observers, target progressed offline | 10, accused | 10, *ahead by 90*, not accused |
-| **a forged event of the target got into the log** | 100 | **999999, fooled** |
+| World | Weighted median (status quo) | Proofs alone, log trusted | **Combined** |
+|---|---|---|---|
+| honest | 100 | 100 | 100 |
+| funded majority saw only an old state (10); one honest saw 100 | **10**, accuses the honest domain | 100 | **100** |
+| unfunded observers who saw an old state | 100 | 100 | 100 |
+| *only* unfunded observers, all saw 100 | no tick (⊥) | 100 | **100** |
+| target rewinds to 50; funded majority saw 50; one honest saw 100 | 50, "consistent" | contradicted | **100, accused (rewind)** |
+| target holds two unrelated histories | 100, no notion of a fork | fork | **100, accused (fork)** |
+| observer cites an event that does not exist | 100 | 100 | 100 |
+| only stale observers; target progressed offline to 100 | 10, accused | 10 | 10, *ahead by 90*, not accused |
+| a forged event (signed by someone else) in the log; funded **minority** cites it | 100 | **999999** | **100** |
+| the same, funded **majority** cites it | **999999**, accuses the honest domain | **999999** | **100** |
+| **the target signs a fake far-ahead event itself, no sequential work; funded majority cites it** | **999999** | **999999** | **999999** |
 
-The last row is the honest limit: the triangulation trusts the events attributed to the target, so it is only as
-good as the signature and proof check that admits them (`progression.js`); the weighted median does not depend
-on that. It gives no upper bound, it is only as fresh as the freshest honest observer, and it says nothing about
-whether observers are distinct actors — `observers` is informational. Fixtures, not a security proof. See the yellow
+The last row is what the combination does **not** cover: the signature is genuine, so a signature-only check
+accepts it. Admission (`applyProgressionEvent`) checks the sequential proof; a caller who wants that check here
+passes a stricter `isAuthentic`. Other limits, unchanged: no upper bound (being ahead is reported, not accused);
+only as fresh as the freshest honest observer; nothing about whether observers are distinct actors —
+`proof.observers` is informational. Synthetic worlds chosen by their author, not a security proof. See the yellow
 paper, §13.2–§13.3, for the design notes (including what always-on hardware is for).
 
 ## Status
 
-336 passing `node --test` cases (335 pure-JS, plus a real Rust build+run
+337 passing `node --test` cases (336 pure-JS, plus a real Rust build+run
 cross-check when `cargo` is available — see above). Self-contained —
 the only external dependencies are `@noble/curves`, `@noble/hashes`,
 `@scure/bip39`, and an optional `@solana/web3.js` peer dependency.

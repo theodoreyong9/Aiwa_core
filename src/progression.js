@@ -55,7 +55,8 @@ export async function buildSignedProgressionEvent(fields, signerSeed, signerPubk
   return { ...withMeta, signerPubkey: toHex(signerPubkeyBytes), signature: toHex(signature) };
 }
 
-async function verifyProgressionAuthorization(payload) {
+/** True only if the payload carries a valid signature by the key whose id IS its `domain` — the same check applyProgressionEvent applies. */
+export async function verifyProgressionAuthorization(payload) {
   const { ed25519 } = await import('@noble/curves/ed25519.js');
   const { domain, epoch, vdfIterations, vdfOutput, nonce, timestamp, signerPubkey, signature } = payload;
   if (typeof signerPubkey !== 'string' || typeof signature !== 'string') return false;
