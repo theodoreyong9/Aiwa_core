@@ -7,6 +7,11 @@ import { withConfirmedBurns, buildSignedAccrualEvent } from '../src/accrual.js';
 import { SOLANA_INCINERATOR_ADDRESS, identityCostFromBurns } from '../src/identity-cost.js';
 import { base58Decode, normalizeBurnTransaction, fetchBurnRecord, verifyBurnRecordFor } from '../src/burn-record.js';
 import { serializeWalletState, deserializeWalletState } from '../src/checkpoint.js';
+import { computeVdfChain, vdfSeed } from '../src/vdf.js';
+import { buildSignedProgressionEvent } from '../src/progression.js';
+import { buildSignedClaimEvent, claimableNow } from '../src/accrual.js';
+import { buildSignedTransferEvent, spendableClaims } from '../src/wallet.js';
+import { fromUnits } from '../src/units.js';
 
 // The genesis commitment (yellow paper §8), enforced: a domain's committed capital b may not exceed what burns
 // THE READER confirmed for it. Mandatory unless the deployment says rewardParams.commitmentBacking = 'none'.
@@ -170,4 +175,54 @@ test('the certified witness weight is what this reader confirmed, and the state 
   const revived = deserializeWalletState(serializeWalletState(state));
   assert.equal(revived.accrual.burns.covered[alice.domain], 4_000_000_000);
   assert.equal(revived.accrual.positions[alice.domain].b, 4);
+});
+
+// What the burn gate is about is where value is MINTED (commitment -> position -> claim). Moving an existing claim
+// from hand to hand looks at nothing but that claim: a relay that never burned anything still passes value on.
+async function progress(state, who, count) {
+  let { epoch, vdfOutput, lastId } = state.accrual.progression.domains[who.domain] ?? { epoch: 0, vdfOutput: null, lastId: null };
+  for (let i = 0; i < count; i++) {
+    epoch += 1;
+    const out = await computeVdfChain(vdfSeed(who.domain, vdfOutput ?? 'genesis'), 50);
+    const id = `${who.domain}-p${epoch}`;
+    state = await applyWalletEvent(base, state, { id, parents: lastId ? [lastId] : [], payload: { type: 'progression', ...(await buildSignedProgressionEvent({ domain: who.domain, epoch, vdfIterations: 50, vdfOutput: out }, who.seed, who.pubkey)) } });
+    vdfOutput = out; lastId = id;
+  }
+  return state;
+}
+async function minted(minter, records) {
+  let state = withConfirmedBurns(initialWalletState(), records);
+  state = await progress(state, minter, 4);
+  state = await applyWalletEvent(base, state, burnEvent(minter, 'mint-burn'));
+  state = await applyWalletEvent(base, state, await commit(minter, 10));
+  state = await progress(state, minter, 4);
+  const amount = fromUnits(claimableNow(base, state.accrual, minter.domain));
+  return applyWalletEvent(base, state, event({ type: 'claim', ...(await buildSignedClaimEvent({ domain: minter.domain, claimId: 'coin', amount }, minter.seed, minter.pubkey)) }));
+}
+const transferOf = async (from, to, claimId) => event({ type: 'transfer', ...(await buildSignedTransferEvent({ claimId, from: from.domain, to: to.domain }, from.seed, from.pubkey)) });
+
+test('a relay that never burned passes value on: only the burn of whoever MINTED it matters to the receiver', async () => {
+  const minter = await person();
+  const relay = await person(); // never burns anything, never published a burn-record
+  const receiver = await person();
+  let state = await minted(minter, { 'mint-burn': recordOf(minter, 10_000_000_000, 'mint-burn') });
+  assert.ok(state.conservation.claims.coin, 'the minter burned, so its claim exists in this reader\'s view');
+
+  state = await applyWalletEvent(base, state, await transferOf(minter, relay, 'coin'));
+  const [held] = spendableClaims(state, relay.domain); // a transfer consumes the claim and hands on a new one
+  assert.ok(held, 'the relay holds it now');
+  state = await applyWalletEvent(base, state, await transferOf(relay, receiver, held.id));
+  assert.deepEqual(state.rejections, []);
+  assert.deepEqual(state.accrual.rejections, []);
+  assert.equal(spendableClaims(state, receiver.domain).length, 1, 'the receiver holds the coin');
+  assert.equal(state.accrual.burns.covered[relay.domain], undefined, 'and this reader never confirmed anything for the relay');
+});
+
+test('a coin whose minter this reader has NOT confirmed never comes into existence, so there is nothing to receive', async () => {
+  const minter = await person();
+  const receiver = await person();
+  let state = await minted(minter, {}); // the reader has not confirmed the minter's burn
+  assert.equal(state.conservation.claims.coin, undefined);
+  state = await applyWalletEvent(base, state, await transferOf(minter, receiver, 'coin'));
+  assert.equal(spendableClaims(state, receiver.domain).length, 0);
 });

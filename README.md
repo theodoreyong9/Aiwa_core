@@ -471,6 +471,9 @@ burns THE READER confirmed cover it**:
 - `fetchBurnRecord(connection, signature)` asks Solana for the **finalized** transaction and returns the record
   (`normalizeBurnTransaction` reads legacy and versioned transactions, keys as strings or objects); `null` when Solana
   does not know it (yet). `identityCostFromBurns(state.accrual.burns)` is then the **certified** witness weight.
+- **It gates minting, not transfer.** Moving a claim from hand to hand looks at nothing but the claim: a relay that
+  never burned anything passes value on (tested). What a receiver needs is the burn of the domain that *minted* the
+  coin; if the reader has not confirmed it, the claim does not exist in its view yet, and there is nothing to receive.
 - **Opt-out, explicit**: `rewardParams.commitmentBacking: 'none'` for tests, demos and private economies. Leaving it
   out means mandatory. This repo's other test suites say so in one line at the top.
 - Deterministic *per reader*: the same log folded with different confirmed records gives different — each correct —
