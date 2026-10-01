@@ -483,6 +483,54 @@ burns THE READER confirmed cover it**:
 - **Not covered**: a burn is confirmed against whichever Solana endpoint the reader asks; a dishonest endpoint is the
   reader's problem. Commitments made before this rule, in a log without burns, are rejected by a reader who enforces it.
 
+## "Last action" mining: a burn replaces the position, T is chosen at the burn
+
+The same shape as YourMine's own mining. The position of a domain is what its **last action** left it:
+
+- **A burn's commitment (`'accrual'`) replaces the position.** `b` is the capital that now mines, `T` the patience
+  rate chosen at this burn for what follows (0 to 0.4, **not inherited**: a burn without a `T` is `T = 0`; a claim
+  never touches it — it costs nothing, so it cannot buy a better one). A small burn after a big one lowers `b`: that is
+  the rule, not an accident.
+- **The previous position is paid first.** Before it is replaced, the claimable accrued so far is credited as a real
+  claim `auto:<nonce>`, owned by the domain and spendable like any other. This was a hole: a second burn used to reset
+  the clock without paying (tested: 8.5×10¹⁶ units claimable → 0).
+- **T has a price, and it is destroyed, not paid to anyone**: `b = burned × (1 − T)`, so a commitment costs
+  `ceil(b / (1 − T))` lamports of confirmed burn (`commitmentPriceLamports`). Each confirmed burn backs commitments
+  once: `burns.consumed` tracks what the domain's commitments used. A larger `T` makes the reward curve more generous
+  (`ln(A^{β(1−T)} + C)`), and costs that share of the burn — so it is a choice, not "always 0.4".
+
+## Progression you can verify without redoing it — `epochIterations`
+
+`rewardParams.epochIterations` fixes the sequential work of one epoch (modular squarings, `wesolowski-vdf.js`). A
+deployment that sets it gets **succinct** progression events (`succinct-vdf.js`):
+
+- one event may carry **k epochs**: `vdfIterations` is exactly `k × epochIterations`, the epoch count jumps by `k`, and
+  **one** Wesolowski proof (`vdfProof: { pi, l }`) covers them all;
+- verifying takes a few milliseconds whatever `k` is (measured: 3.6 ms for 100 000 and for 400 000 squarings, against
+  0.5 s and 2.8 s to produce); the work starts from a point derived from the domain and the previous output, so it
+  cannot be done ahead, borrowed from another domain or reused;
+- **it closes a hole in the hash-chain version**: the reducer used to accept any `vdfIterations >= 1`, so an "epoch" could
+  cost one hash and a domain's age could be inflated for nothing. With `epochIterations` an epoch is a fixed amount of
+  work, or it is refused (tested).
+
+Without `epochIterations` nothing changes: the hash-chain epochs of before, `+1` per event, verified by recomputing.
+A hash-chain output is refused by a deployment that sets it. Time here is **sequential work**, not calendar time: a
+faster machine makes more epochs per second — the usual VDF caveat.
+
+## The two states: mining state and ranking figure — `assessMining`
+
+For an app, a validator or a registry that holds a domain's events (`mining-state.js`):
+
+- `miningState(rewardParams, walletState, domain)` — the capital that mines, `T`, the epoch of the last action, the age
+  (the domain's epochs), the epochs since the last action, the claimable now.
+- `rankingFigure(mining)` — `{ score, laps, epoch }`: the claimable and the laps (≥ 1), as YourMine's score and laps are.
+- `assessMining({ rewardParams, events, burnRecords, domain, baseline })` derives both from raw events: each envelope
+  is verified (id, author, signature; a tampered event is set aside), the events are folded by the same reducers a
+  wallet uses, and what the validator did not confirm counts for nothing — the **burn records are the validator's own**
+  (`fetchBurnRecord`: it asks Solana itself). `baseline` (the state this validator derived earlier, kept with
+  `serializeWalletState`) makes it incremental: only the new events are folded. Cost: one signature per event plus a few
+  ms per progression event — not the work the domain did.
+
 ## Position: proofs and the weighted median, combined (experimental)
 
 `computeCausalTick`'s weighted median is a **vote** (weight = committed capital). A Mirror reception commitment,

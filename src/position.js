@@ -41,12 +41,13 @@ import { authenticEvents, replayProgression, signatureAuthentic, triangulate, ju
  * @param {object} [args.hardwareAttestations] passed through to computeCausalTick
  * @param {'auto' | 'require' | 'off'} [args.verifyChain]
  * @param {Function} [args.verifyFn] the sequential-proof verifier (defaults to progression.js's)
+ * @param {number} [args.epochIterations] the deployment's fixed work of one epoch (rewardParams.epochIterations), if it has one
  */
-export async function assessPosition({ mirrorState, identityCostState, orderedEvents, targetDomain, selfReportedEpoch = null, tolerance = 5, hardwareAttestations = {}, verifyChain = 'auto', verifyFn }) {
+export async function assessPosition({ mirrorState, identityCostState, orderedEvents, targetDomain, selfReportedEpoch = null, tolerance = 5, hardwareAttestations = {}, verifyChain = 'auto', verifyFn, epochIterations }) {
   let verification = 'signature';
   let isAuthentic = signatureAuthentic;
   if (verifyChain !== 'off') {
-    const replay = await replayProgression(orderedEvents, targetDomain, verifyFn);
+    const replay = await replayProgression(orderedEvents, targetDomain, verifyFn, { epochIterations });
     if (replay.genesis || verifyChain === 'require') {
       verification = 'chain';
       isAuthentic = async (event) => replay.accepted.has(event.id);

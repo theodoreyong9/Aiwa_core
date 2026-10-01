@@ -32,6 +32,7 @@
 // bridge from event.js's own wire event shape.
 
 import { vdfSeed, verifyVdfChain } from './vdf.js';
+import { verifySuccinctEpochs } from './succinct-vdf.js';
 import { deriveId } from './identity.js';
 
 function toHex(bytes) {
@@ -106,7 +107,7 @@ export function progressionParents(heads, lastId) {
 // worker-backed verifier instead, so that even this one-time catch-up
 // work never has to run on the same thread that also needs to render
 // and handle input.
-export async function applyProgressionEvent(state, event, verifyFn = verifyVdfChain) {
+export async function applyProgressionEvent(state, event, verifyFn = verifyVdfChain, { epochIterations } = {}) {
   verifyFn ??= verifyVdfChain;
   const payload = event.payload;
   if (!payload || payload.type !== 'progression') return state;
@@ -117,12 +118,25 @@ export async function applyProgressionEvent(state, event, verifyFn = verifyVdfCh
     rejections: [...state.rejections, { eventId: event.id, domain, reason }],
   });
 
+  // A deployment that fixes the work of one epoch (rewardParams.epochIterations) gets succinct events: k epochs at
+  // once, k x epochIterations squarings, one proof checked in milliseconds. Without it, the original rule: +1 per
+  // event, a hash chain of whatever length the signer wrote, verified by recomputing it.
+  const workBound = Number.isInteger(epochIterations) && epochIterations > 0;
+
   if (typeof domain !== 'string' || domain.length === 0) return reject('missing domain');
   if (!Number.isInteger(epoch) || epoch < 1) return reject('epoch must be a positive integer');
 
   const current = state.domains[domain] ?? { epoch: 0, lastId: null, vdfOutput: null };
 
-  if (epoch !== current.epoch + 1) return reject(`expected epoch ${current.epoch + 1}, got ${epoch}`);
+  if (workBound) {
+    if (epoch <= current.epoch) return reject(`epoch must go past ${current.epoch}, got ${epoch}`);
+    const step = epoch - current.epoch;
+    if (vdfIterations !== step * epochIterations) {
+      return reject(`${step} epoch(s) are ${step * epochIterations} iterations (an epoch is ${epochIterations}); got ${vdfIterations}`);
+    }
+  } else if (epoch !== current.epoch + 1) {
+    return reject(`expected epoch ${current.epoch + 1}, got ${epoch}`);
+  }
   if (current.lastId !== null && !event.parents.includes(current.lastId)) {
     return reject(`does not chain from this domain's last accepted transition ${current.lastId}`);
   }
@@ -135,16 +149,20 @@ export async function applyProgressionEvent(state, event, verifyFn = verifyVdfCh
   }
 
   const seed = vdfSeed(domain, current.vdfOutput ?? 'genesis');
-  if (!(await verifyFn(seed, vdfIterations, vdfOutput))) {
+  if (workBound) {
+    if (!(await verifySuccinctEpochs(seed, vdfIterations, vdfOutput, payload.vdfProof))) {
+      return reject('the proof of the work of these epochs does not verify');
+    }
+  } else if (!(await verifyFn(seed, vdfIterations, vdfOutput))) {
     return reject('VDF proof does not verify against the recomputed chain');
   }
 
   return { ...state, domains: { ...state.domains, [domain]: { epoch, lastId: event.id, vdfOutput } } };
 }
 
-export async function materializeProgression(orderedEvents, verifyFn = verifyVdfChain) {
+export async function materializeProgression(orderedEvents, verifyFn = verifyVdfChain, options) {
   verifyFn ??= verifyVdfChain;
   let state = initialProgressionState();
-  for (const event of orderedEvents) state = await applyProgressionEvent(state, event, verifyFn);
+  for (const event of orderedEvents) state = await applyProgressionEvent(state, event, verifyFn, options);
   return state;
 }

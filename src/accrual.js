@@ -207,7 +207,7 @@ export async function applyAccrualEvent(rewardParams, state, event, verifyFn) {
   if (!payload || typeof payload.type !== 'string') return state;
 
   if (payload.type === 'progression') {
-    return { ...state, progression: await applyProgressionEvent(state.progression, event, verifyFn) };
+    return { ...state, progression: await applyProgressionEvent(state.progression, event, verifyFn, { epochIterations: rewardParams?.epochIterations }) };
   }
 
   if (payload.type === 'accrual') {

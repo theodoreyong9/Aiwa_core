@@ -89,15 +89,19 @@ function isAncestor(byId, ancestorId, descendantId) {
  * @param {Array<{ id: string, parents: string[], payload: object }>} orderedEvents in topological order
  * @returns {Promise<{ accepted: Set<string>, genesis: boolean, rejections: object[] }>}
  */
-export async function replayProgression(orderedEvents, domain, verifyFn) {
+export async function replayProgression(orderedEvents, domain, verifyFn, options = {}) {
   let state = initialProgressionState();
   const accepted = new Set();
   let genesis = false;
+  const workBound = Number.isInteger(options.epochIterations) && options.epochIterations > 0;
   for (const event of orderedEvents) {
     if (!isProgressionOf(event, domain)) continue;
-    if (event.payload.epoch === 1) genesis = true;
+    // The reader holds the chain from its start: the hash-chain rule begins at epoch 1; a deployment that fixes the
+    // work of an epoch may start with an event of k epochs, whose work is then exactly k x epochIterations.
+    const { epoch, vdfIterations } = event.payload;
+    if (epoch === 1 || (workBound && vdfIterations === epoch * options.epochIterations)) genesis = true;
     const before = state.rejections.length;
-    state = await applyProgressionEvent(state, event, verifyFn);
+    state = await applyProgressionEvent(state, event, verifyFn, options);
     if (state.rejections.length === before) accepted.add(event.id);
   }
   return { accepted, genesis, rejections: state.rejections };

@@ -71,3 +71,30 @@ export async function verify(x, iterations, y, proof, N = RSA_2048_MODULUS) {
   const check = (modPow(proof.pi, proof.l, N) * modPow(x % N, r, N)) % N;
   return check === (y % N);
 }
+
+// Same computations as evaluate()/prove(), but they give the event loop back every `chunk` steps, so a browser tab
+// that runs them keeps painting and answering input (the sequential work is unchanged: nothing is skipped).
+const yieldToMain = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+export async function evaluateAsync(x, iterations, N = RSA_2048_MODULUS, chunk = 4000) {
+  let y = x % N;
+  for (let i = 0; i < iterations; i++) {
+    y = (y * y) % N;
+    if (i % chunk === chunk - 1) await yieldToMain();
+  }
+  return y;
+}
+
+export async function proveAsync(x, iterations, y, N = RSA_2048_MODULUS, chunk = 4000) {
+  const l = await deriveChallenge(x % N, iterations, y);
+  let pi = 1n;
+  let r = 1n;
+  for (let i = 0; i < iterations; i++) {
+    const doubled = 2n * r;
+    const bit = doubled / l;
+    r = doubled % l;
+    pi = (pi * pi % N) * modPow(x % N, bit, N) % N;
+    if (i % chunk === chunk - 1) await yieldToMain();
+  }
+  return { pi, l };
+}

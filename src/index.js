@@ -21,6 +21,8 @@ export { FixedPointError, FRAC_BITS, SCALE, mulFixed, divFixed, bitLengthNonNeg,
 export { DECIMALS, toUnits, fromUnits, fromFloat, fixedToUnits, format } from './units.js';
 
 export { vdfSeed, computeVdfChain, verifyVdfChain } from './vdf.js';
+export { miningState, rankingFigure, assessMining } from './mining-state.js';
+export { verifySuccinctEpochs, computeSuccinctEpochs, seedToGroupElement } from './succinct-vdf.js';
 export { RSA_2048_MODULUS, evaluate as wesolowskiEvaluate, prove as wesolowskiProve, verify as wesolowskiVerify } from './wesolowski-vdf.js';
 
 export { weightedMedian } from './weighted-median.js';
