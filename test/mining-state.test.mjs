@@ -4,7 +4,7 @@ import { generateIdentity } from '../src/identity.js';
 import { createEvent } from '../src/event.js';
 import { vdfSeed } from '../src/vdf.js';
 import { computeSuccinctEpochs } from '../src/succinct-vdf.js';
-import { buildSignedProgressionEvent } from '../src/progression.js';
+import { buildSignedProgressionEvent, progressionSeed } from '../src/progression.js';
 import { buildSignedAccrualEvent, buildSignedClaimEvent } from '../src/accrual.js';
 import { normalizeBurnTransaction } from '../src/burn-record.js';
 import { SOLANA_INCINERATOR_ADDRESS } from '../src/identity-cost.js';
@@ -36,30 +36,32 @@ async function history(who, steps) {
   let vdfOutput = null;
   let epoch = 0;
   let lastProgression = null;
+  let chainHead = null; // the last mining event: what the next one names as `previous`
   const append = async (type, payload) => {
     const parents = type === 'progression' && lastProgression && !head.includes(lastProgression) ? [...head, lastProgression] : head;
     const e = await createEvent(who, { domain: `log:${who.id}`, parents, type, payload });
     events.push(e);
     head = [e.id];
     if (type === 'progression') lastProgression = e.id;
+    if (type === 'progression' || type === 'accrual' || type === 'claim') chainHead = e.id;
     return e;
   };
   for (const step of steps) {
     if (step.burn) await append('burn-record', { domain: who.id, signature: step.burn });
     if (step.epochs) {
       const iterations = step.epochs * EI;
-      const work = await computeSuccinctEpochs(vdfSeed(who.id, vdfOutput ?? 'genesis'), iterations);
+      const work = await computeSuccinctEpochs(progressionSeed(who.id, vdfOutput, chainHead), iterations);
       epoch += step.epochs;
-      const signed = await buildSignedProgressionEvent({ domain: who.id, epoch, vdfIterations: iterations, vdfOutput: work.vdfOutput }, secretOf(who), who.publicKeyBytes);
+      const signed = await buildSignedProgressionEvent({ domain: who.id, epoch, vdfIterations: iterations, vdfOutput: work.vdfOutput, previous: chainHead }, secretOf(who), who.publicKeyBytes);
       await append('progression', { ...signed, vdfProof: work.vdfProof });
       vdfOutput = work.vdfOutput;
     }
     if (step.commit) {
-      const signed = await buildSignedAccrualEvent({ domain: who.id, ...step.commit }, secretOf(who), who.publicKeyBytes);
+      const signed = await buildSignedAccrualEvent({ domain: who.id, ...step.commit, previous: chainHead }, secretOf(who), who.publicKeyBytes);
       await append('accrual', signed);
     }
     if (step.claim) {
-      const signed = await buildSignedClaimEvent({ domain: who.id, claimId: step.claim.claimId, amount: step.claim.amount }, secretOf(who), who.publicKeyBytes);
+      const signed = await buildSignedClaimEvent({ domain: who.id, claimId: step.claim.claimId, amount: step.claim.amount, previous: chainHead }, secretOf(who), who.publicKeyBytes);
       await append('claim', signed);
     }
   }

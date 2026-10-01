@@ -517,6 +517,24 @@ Without `epochIterations` nothing changes: the hash-chain epochs of before, `+1`
 A hash-chain output is refused by a deployment that sets it. Time here is **sequential work**, not calendar time: a
 faster machine makes more epochs per second — the usual VDF caveat.
 
+**The mining events are one signed chain.** In such a deployment every progression, accrual and claim of a domain names,
+in its signed payload, the mining event it follows (`previous`: an id, or `null` before the first), and the reducer keeps
+the last accepted one (`accrual.chain`, `miningChainHead`). The work of an epoch starts from that event too
+(`progressionSeed(domain, previousOutput, previous)`). Three things follow, all tested (`test/chained-mining.test.mjs`):
+
+- an action (a burn's accrual, a claim) **cannot be left out** of a history: the epochs worked after it are bound to it,
+  so without it they are refused;
+- the same proven work **cannot be re-signed** over another history — a different predecessor is a different starting
+  point, so showing a history without an action means redoing, from that action on, the work the other one holds;
+- two actions that follow the same event are a fork: one is kept, the other refused. An action cannot be placed earlier
+  than it was made (before, which of two concurrent events was folded first decided its epoch).
+
+The link is a signed field, **not** the event's `parents`: parents are the log's heads at that moment (a checkpoint, a
+reception commitment) and name events that pruning later removes. (Before this, a progression event made after a
+checkpoint named the checkpoint as its parent and was refused by a reader that held the history without it.) What the
+chain does not give: a witness that no *other* history exists — a wallet can still keep two and show one. That is what
+someone else holding the other one is for (aiwa-lib's `witnesses()`, YourMine's registry).
+
 ## The two states: mining state and ranking figure — `assessMining`
 
 For an app, a validator or a registry that holds a domain's events (`mining-state.js`):
@@ -597,7 +615,7 @@ yellow paper, §13.2–§13.3, for the design notes (including what always-on ha
 
 ## Status
 
-355 passing `node --test` cases (354 pure-JS, plus a real Rust build+run
+389 passing `node --test` cases (354 pure-JS, plus a real Rust build+run
 cross-check when `cargo` is available — see above). Self-contained —
 the only external dependencies are `@noble/curves`, `@noble/hashes`,
 `@scure/bip39`, and an optional `@solana/web3.js` peer dependency.

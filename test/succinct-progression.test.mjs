@@ -5,7 +5,7 @@ import { vdfSeed, computeVdfChain } from '../src/vdf.js';
 import { deriveId } from '../src/identity.js';
 import { computeSuccinctEpochs, verifySuccinctEpochs } from '../src/succinct-vdf.js';
 import { RSA_2048_MODULUS } from '../src/wesolowski-vdf.js';
-import { buildSignedProgressionEvent, applyProgressionEvent, initialProgressionState } from '../src/progression.js';
+import { buildSignedProgressionEvent, applyProgressionEvent, initialProgressionState, progressionSeed } from '../src/progression.js';
 import { replayProgression } from '../src/triangulation.js';
 
 // A deployment that fixes the work of one epoch: epochIterations. Small here so the tests are quick; a real one is
@@ -22,10 +22,12 @@ let n = 0;
 // a progression event of `epochs` epochs after `state`'s current one, with the work done honestly (or as told)
 async function event(who, state, { epochs = 1, iterations = epochs * EI, tamper } = {}) {
   const current = state.domains[who.domain] ?? { epoch: 0, vdfOutput: null, lastId: null };
-  const seed = vdfSeed(who.domain, current.vdfOutput ?? 'genesis');
+  // progression events alone here: each follows the previous one (accrual.js chains the actions in too)
+  const previous = current.lastId ?? null;
+  const seed = progressionSeed(who.domain, current.vdfOutput, previous);
   let work = await computeSuccinctEpochs(seed, iterations);
   if (tamper) work = tamper(work);
-  const signed = await buildSignedProgressionEvent({ domain: who.domain, epoch: current.epoch + epochs, vdfIterations: iterations, vdfOutput: work.vdfOutput }, who.seed, who.pubkey);
+  const signed = await buildSignedProgressionEvent({ domain: who.domain, epoch: current.epoch + epochs, vdfIterations: iterations, vdfOutput: work.vdfOutput, previous }, who.seed, who.pubkey);
   return { id: `e${++n}`, parents: current.lastId ? [current.lastId] : [], payload: { type: 'progression', ...signed, vdfProof: work.vdfProof } };
 }
 const accepted = (before, after) => after.rejections.length === before.rejections.length;
@@ -64,13 +66,13 @@ test('claiming more epochs than the work done is refused, however the numbers ar
   const a = await person();
   const s = initialProgressionState();
   // 10 epochs announced, the work of 1 done and proven honestly
-  const work = await computeSuccinctEpochs(vdfSeed(a.domain, 'genesis'), EI);
-  const signed = await buildSignedProgressionEvent({ domain: a.domain, epoch: 10, vdfIterations: EI, vdfOutput: work.vdfOutput }, a.seed, a.pubkey);
+  const work = await computeSuccinctEpochs(progressionSeed(a.domain, null, null), EI);
+  const signed = await buildSignedProgressionEvent({ domain: a.domain, epoch: 10, vdfIterations: EI, vdfOutput: work.vdfOutput, previous: null }, a.seed, a.pubkey);
   const lie = { id: 'lie', parents: [], payload: { type: 'progression', ...signed, vdfProof: work.vdfProof } };
   const after = await applyProgressionEvent(s, lie, null, opts);
   assert.equal(after.domains[a.domain], undefined);
   // and the same with the iterations raised to match: the proof is for 200 squarings, not 2000
-  const signed2 = await buildSignedProgressionEvent({ domain: a.domain, epoch: 10, vdfIterations: 10 * EI, vdfOutput: work.vdfOutput }, a.seed, a.pubkey);
+  const signed2 = await buildSignedProgressionEvent({ domain: a.domain, epoch: 10, vdfIterations: 10 * EI, vdfOutput: work.vdfOutput, previous: null }, a.seed, a.pubkey);
   const lie2 = { id: 'lie2', parents: [], payload: { type: 'progression', ...signed2, vdfProof: work.vdfProof } };
   const after2 = await applyProgressionEvent(s, lie2, null, opts);
   assert.equal(after2.domains[a.domain], undefined);
@@ -82,9 +84,10 @@ test('a hash-chain output is not accepted by a deployment that fixes the work of
   const s = initialProgressionState();
   const seed = vdfSeed(a.domain, 'genesis');
   const vdfOutput = await computeVdfChain(seed, EI);
-  const signed = await buildSignedProgressionEvent({ domain: a.domain, epoch: 1, vdfIterations: EI, vdfOutput }, a.seed, a.pubkey);
+  const signed = await buildSignedProgressionEvent({ domain: a.domain, epoch: 1, vdfIterations: EI, vdfOutput, previous: null }, a.seed, a.pubkey);
   const after = await applyProgressionEvent(s, { id: 'h', parents: [], payload: { type: 'progression', ...signed } }, null, opts);
   assert.equal(after.domains[a.domain], undefined);
+  assert.match(after.rejections[0].reason, /proof of the work/);
 });
 
 test('a tampered output or proof, a non-canonical output (y + N) and another domain\'s work are all refused', async () => {
@@ -104,8 +107,8 @@ test('a tampered output or proof, a non-canonical output (y + N) and another dom
     assert.equal(after.domains[a.domain], undefined, name);
   }
   // b's work, signed by a under a's domain: the work starts from b's seed, not a's
-  const bWork = await computeSuccinctEpochs(vdfSeed(b.domain, 'genesis'), EI);
-  const signed = await buildSignedProgressionEvent({ domain: a.domain, epoch: 1, vdfIterations: EI, vdfOutput: bWork.vdfOutput }, a.seed, a.pubkey);
+  const bWork = await computeSuccinctEpochs(progressionSeed(b.domain, null, null), EI);
+  const signed = await buildSignedProgressionEvent({ domain: a.domain, epoch: 1, vdfIterations: EI, vdfOutput: bWork.vdfOutput, previous: null }, a.seed, a.pubkey);
   const borrowed = await applyProgressionEvent(s, { id: 'x', parents: [], payload: { type: 'progression', ...signed, vdfProof: bWork.vdfProof } }, null, opts);
   assert.equal(borrowed.domains[a.domain], undefined, 'work cannot be borrowed');
 });
@@ -114,8 +117,8 @@ test('the work of an epoch cannot be done ahead: it starts from the previous out
   const a = await person();
   let s = initialProgressionState();
   const first = await event(a, s);
-  const aheadSeed = vdfSeed(a.domain, first.payload.vdfOutput);
-  assert.equal(await verifySuccinctEpochs(vdfSeed(a.domain, 'genesis'), EI, first.payload.vdfOutput, first.payload.vdfProof), true);
+  const aheadSeed = progressionSeed(a.domain, first.payload.vdfOutput, 'e1');
+  assert.equal(await verifySuccinctEpochs(progressionSeed(a.domain, null, null), EI, first.payload.vdfOutput, first.payload.vdfProof), true);
   assert.equal(await verifySuccinctEpochs(aheadSeed, EI, first.payload.vdfOutput, first.payload.vdfProof), false);
 });
 

@@ -44,8 +44,23 @@ function fromHex(hex) {
   return bytes;
 }
 
-function canonicalProgressionMessage({ domain, epoch, vdfIterations, vdfOutput, nonce, timestamp }) {
-  return JSON.stringify({ domain, epoch, vdfIterations, vdfOutput, nonce, timestamp });
+// `previous` (the mining event this one follows — see progressionSeed) is signed when present; JSON.stringify leaves an
+// undefined one out, so an event without it keeps the bytes it always had.
+function canonicalProgressionMessage({ domain, epoch, vdfIterations, vdfOutput, nonce, timestamp, previous }) {
+  return JSON.stringify({ domain, epoch, vdfIterations, vdfOutput, nonce, timestamp, previous });
+}
+
+/**
+ * Where the work of a work-bound progression event starts: the domain, its previous output, AND the mining event
+ * this one follows (`previous`: the id of the domain's last progression, accrual or claim; null before the first).
+ *
+ * Why the last one is in it. The work used to start from the previous output alone, so one stretch of proven work
+ * could be re-signed over any history: an action (a burn, a claim) could be left out, or two histories kept side by
+ * side, at no cost. Starting the work from the event it follows ties it to that exact history: showing a history
+ * without an action means redoing, from that action on, all the work the other one holds.
+ */
+export function progressionSeed(domain, previousOutput, previous) {
+  return `${vdfSeed(domain, previousOutput ?? 'genesis')}:${previous ?? 'none'}`;
 }
 
 /** A real, domain-owner-signed progression transition — the only way a 'progression' event now passes applyProgressionEvent's own authorization check. */
@@ -59,11 +74,11 @@ export async function buildSignedProgressionEvent(fields, signerSeed, signerPubk
 /** True only if the payload carries a valid signature by the key whose id IS its `domain` — the same check applyProgressionEvent applies. */
 export async function verifyProgressionAuthorization(payload) {
   const { ed25519 } = await import('@noble/curves/ed25519.js');
-  const { domain, epoch, vdfIterations, vdfOutput, nonce, timestamp, signerPubkey, signature } = payload;
+  const { domain, epoch, vdfIterations, vdfOutput, nonce, timestamp, previous, signerPubkey, signature } = payload;
   if (typeof signerPubkey !== 'string' || typeof signature !== 'string') return false;
   if ((await deriveId(fromHex(signerPubkey))) !== domain) return false; // only the domain's real key can advance its own progression
   try {
-    return ed25519.verify(fromHex(signature), new TextEncoder().encode(canonicalProgressionMessage({ domain, epoch, vdfIterations, vdfOutput, nonce, timestamp })), fromHex(signerPubkey));
+    return ed25519.verify(fromHex(signature), new TextEncoder().encode(canonicalProgressionMessage({ domain, epoch, vdfIterations, vdfOutput, nonce, timestamp, previous })), fromHex(signerPubkey));
   } catch {
     return false;
   }
@@ -107,7 +122,10 @@ export function progressionParents(heads, lastId) {
 // worker-backed verifier instead, so that even this one-time catch-up
 // work never has to run on the same thread that also needs to render
 // and handle input.
-export async function applyProgressionEvent(state, event, verifyFn = verifyVdfChain, { epochIterations } = {}) {
+// `chainHead` (work-bound deployments): the id of the domain's last mining event as the caller folded it — accrual.js
+// passes it. A caller that folds progression events alone (a replay) leaves it out: `previous` is then taken as the
+// event states it, and the work still has to start from it.
+export async function applyProgressionEvent(state, event, verifyFn = verifyVdfChain, { epochIterations, chainHead } = {}) {
   verifyFn ??= verifyVdfChain;
   const payload = event.payload;
   if (!payload || payload.type !== 'progression') return state;
@@ -134,11 +152,20 @@ export async function applyProgressionEvent(state, event, verifyFn = verifyVdfCh
     if (vdfIterations !== step * epochIterations) {
       return reject(`${step} epoch(s) are ${step * epochIterations} iterations (an epoch is ${epochIterations}); got ${vdfIterations}`);
     }
-  } else if (epoch !== current.epoch + 1) {
-    return reject(`expected epoch ${current.epoch + 1}, got ${epoch}`);
-  }
-  if (current.lastId !== null && !event.parents.includes(current.lastId)) {
-    return reject(`does not chain from this domain's last accepted transition ${current.lastId}`);
+    // The chain is the signed `previous`, not the event's `parents`: parents are whatever the log's heads were (a
+    // checkpoint, a reception commitment) and can name events that pruning later removes; `previous` always names
+    // the last mining event, wherever it is kept.
+    if (payload.previous === undefined || (payload.previous !== null && typeof payload.previous !== 'string')) {
+      return reject('a progression event names the mining event it follows (previous: an id, or null before the first)');
+    }
+    if (chainHead !== undefined && payload.previous !== chainHead) {
+      return reject(`follows ${payload.previous}, but this domain's last mining event is ${chainHead}`);
+    }
+  } else {
+    if (epoch !== current.epoch + 1) return reject(`expected epoch ${current.epoch + 1}, got ${epoch}`);
+    if (current.lastId !== null && !event.parents.includes(current.lastId)) {
+      return reject(`does not chain from this domain's last accepted transition ${current.lastId}`);
+    }
   }
   if (!Number.isInteger(vdfIterations) || vdfIterations < 1) return reject('vdfIterations must be a positive integer');
   if (typeof payload.nonce !== 'string' || !payload.nonce || typeof payload.signerPubkey !== 'string' || typeof payload.signature !== 'string') {
@@ -148,7 +175,7 @@ export async function applyProgressionEvent(state, event, verifyFn = verifyVdfCh
     return reject('invalid signature: only the domain itself can advance its own progression');
   }
 
-  const seed = vdfSeed(domain, current.vdfOutput ?? 'genesis');
+  const seed = workBound ? progressionSeed(domain, current.vdfOutput, payload.previous) : vdfSeed(domain, current.vdfOutput ?? 'genesis');
   if (workBound) {
     if (!(await verifySuccinctEpochs(seed, vdfIterations, vdfOutput, payload.vdfProof))) {
       return reject('the proof of the work of these epochs does not verify');

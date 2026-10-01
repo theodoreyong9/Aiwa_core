@@ -55,8 +55,10 @@ function fromHex(hex) {
   return bytes;
 }
 
-function canonicalAccrualMessage({ domain, b, T, nonce, timestamp }) {
-  return JSON.stringify({ domain, b, T: T ?? null, nonce, timestamp });
+// `previous` — the mining event this one follows (see progression.js's progressionSeed) — is signed when present;
+// JSON.stringify leaves an undefined one out, so an event without it keeps the bytes it always had.
+function canonicalAccrualMessage({ domain, b, T, nonce, timestamp, previous }) {
+  return JSON.stringify({ domain, b, T: T ?? null, nonce, timestamp, previous });
 }
 
 /** A real, domain-owner-signed commitment of additional capital `b` (and optionally `T`) to the domain's own position. */
@@ -69,18 +71,18 @@ export async function buildSignedAccrualEvent(fields, signerSeed, signerPubkeyBy
 
 async function verifyAccrualAuthorization(event) {
   const { ed25519 } = await import('@noble/curves/ed25519.js');
-  const { domain, b, T, nonce, timestamp, signerPubkey, signature } = event;
+  const { domain, b, T, nonce, timestamp, previous, signerPubkey, signature } = event;
   if (typeof signerPubkey !== 'string' || typeof signature !== 'string') return false;
   if ((await deriveId(fromHex(signerPubkey))) !== domain) return false; // only the domain's real key can commit capital to its own position
   try {
-    return ed25519.verify(fromHex(signature), new TextEncoder().encode(canonicalAccrualMessage({ domain, b, T, nonce, timestamp })), fromHex(signerPubkey));
+    return ed25519.verify(fromHex(signature), new TextEncoder().encode(canonicalAccrualMessage({ domain, b, T, nonce, timestamp, previous })), fromHex(signerPubkey));
   } catch {
     return false;
   }
 }
 
-function canonicalClaimMessage({ domain, amount, claimId, nonce, timestamp }) {
-  return JSON.stringify({ domain, amount, claimId: claimId ?? null, nonce, timestamp });
+function canonicalClaimMessage({ domain, amount, claimId, nonce, timestamp, previous }) {
+  return JSON.stringify({ domain, amount, claimId: claimId ?? null, nonce, timestamp, previous });
 }
 
 /** A real, domain-owner-signed claim, moving `amount` from the domain's own accrued position into its real, spendable balance. */
@@ -93,11 +95,11 @@ export async function buildSignedClaimEvent(fields, signerSeed, signerPubkeyByte
 
 async function verifyClaimAuthorization(event) {
   const { ed25519 } = await import('@noble/curves/ed25519.js');
-  const { domain, amount, claimId, nonce, timestamp, signerPubkey, signature } = event;
+  const { domain, amount, claimId, nonce, timestamp, previous, signerPubkey, signature } = event;
   if (typeof signerPubkey !== 'string' || typeof signature !== 'string') return false;
   if ((await deriveId(fromHex(signerPubkey))) !== domain) return false; // only the domain's real key can trigger its own claim
   try {
-    return ed25519.verify(fromHex(signature), new TextEncoder().encode(canonicalClaimMessage({ domain, amount, claimId, nonce, timestamp })), fromHex(signerPubkey));
+    return ed25519.verify(fromHex(signature), new TextEncoder().encode(canonicalClaimMessage({ domain, amount, claimId, nonce, timestamp, previous })), fromHex(signerPubkey));
   } catch {
     return false;
   }
@@ -115,15 +117,15 @@ function canonicalDelegationMessage({ delegate, from }) {
   return JSON.stringify({ delegate, from });
 }
 
-function canonicalDelegatedClaimMessage({ domain, amount, claimId, delegate, nonce, timestamp }) {
-  return JSON.stringify({ domain, amount, claimId: claimId ?? null, delegate, nonce, timestamp });
+function canonicalDelegatedClaimMessage({ domain, amount, claimId, delegate, nonce, timestamp, previous }) {
+  return JSON.stringify({ domain, amount, claimId: claimId ?? null, delegate, nonce, timestamp, previous });
 }
 
 /** One real, delegate-signed claim, reusing an already-issued real delegation, landing the claimed value under the real owner's domain (delegation.from) — never needs the owner's own key again. */
 export async function buildSignedDelegatedClaimEvent(delegation, fields, delegateSeed, delegatePubkeyBytes, { now = Date.now(), nonce = crypto.randomUUID() } = {}) {
   const { ed25519 } = await import('@noble/curves/ed25519.js');
-  const { claimId, amount } = fields;
-  const withMeta = { domain: delegation.from, amount, claimId, delegate: delegation.delegate, nonce, timestamp: now };
+  const { claimId, amount, previous } = fields;
+  const withMeta = { domain: delegation.from, amount, claimId, delegate: delegation.delegate, nonce, timestamp: now, previous };
   const signature = ed25519.sign(new TextEncoder().encode(canonicalDelegatedClaimMessage(withMeta)), delegateSeed);
   return {
     ...withMeta,
@@ -136,7 +138,7 @@ export async function buildSignedDelegatedClaimEvent(delegation, fields, delegat
 
 async function verifyDelegatedClaimAuthorization(event) {
   const { ed25519 } = await import('@noble/curves/ed25519.js');
-  const { domain, amount, claimId, delegate, nonce, timestamp, ownerPubkey, delegationSignature, signerPubkey, signature } = event;
+  const { domain, amount, claimId, delegate, nonce, timestamp, previous, ownerPubkey, delegationSignature, signerPubkey, signature } = event;
 
   if ((await deriveId(fromHex(ownerPubkey))) !== domain) return false; // the claim's own real domain must really derive from the embedded owner pubkey
   if (toHex(fromHex(signerPubkey)) !== delegate) return false; // the claim's own real signer must be exactly the delegated key, not anyone else
@@ -151,7 +153,7 @@ async function verifyDelegatedClaimAuthorization(event) {
 
   let claimSigValid;
   try {
-    claimSigValid = ed25519.verify(fromHex(signature), new TextEncoder().encode(canonicalDelegatedClaimMessage({ domain, amount, claimId, delegate, nonce, timestamp })), fromHex(signerPubkey));
+    claimSigValid = ed25519.verify(fromHex(signature), new TextEncoder().encode(canonicalDelegatedClaimMessage({ domain, amount, claimId, delegate, nonce, timestamp, previous })), fromHex(signerPubkey));
   } catch {
     return false;
   }
@@ -168,8 +170,35 @@ export function initialBurnsState() {
   return { records: {}, covered: {}, used: {}, consumed: {} };
 }
 
+// `chain` (domain -> id): the domain's last accepted mining event — progression, accrual, claim. A work-bound
+// deployment (rewardParams.epochIterations) makes these events a chain: each one names, in its signed payload, the one
+// it follows (`previous`), and a progression event's work starts from it. See chainViolation.
 export function initialAccrualState() {
-  return { progression: initialProgressionState(), positions: {}, balances: {}, usedNonces: {}, rejections: [], burns: initialBurnsState() };
+  return { progression: initialProgressionState(), positions: {}, balances: {}, usedNonces: {}, rejections: [], burns: initialBurnsState(), chain: {} };
+}
+
+const isWorkBound = (rewardParams) => Number.isInteger(rewardParams?.epochIterations) && rewardParams.epochIterations > 0;
+
+/**
+ * Work-bound deployments: why this domain's mining event does not follow its chain, or null if it does. The events
+ * of a domain are a line, and the line is signed: an event that names another predecessor than the last accepted one
+ * is a second history (a fork) or a skipped step (an action left out), and is refused. Which of two events naming
+ * the same predecessor is the real one is not for the reader to guess: the first folded is kept, and whoever shows
+ * the other history has to hold work that starts from it.
+ */
+function chainViolation(rewardParams, state, payload) {
+  if (!isWorkBound(rewardParams)) return null;
+  if (payload.previous === undefined || (payload.previous !== null && typeof payload.previous !== 'string')) {
+    return 'must name the mining event it follows (previous: an id, or null before the first)';
+  }
+  const head = state.chain?.[payload.domain] ?? null;
+  if (payload.previous !== head) return `follows ${payload.previous}, but this domain's last mining event is ${head}`;
+  return null;
+}
+
+/** The id of `domain`'s last accepted mining event in `accrualState`, or null — what a new one must name as `previous`. */
+export function miningChainHead(accrualState, domain) {
+  return accrualState.chain?.[domain] ?? null;
 }
 
 const LAMPORTS_PER_UNIT = 1_000_000_000;
@@ -207,7 +236,15 @@ export async function applyAccrualEvent(rewardParams, state, event, verifyFn) {
   if (!payload || typeof payload.type !== 'string') return state;
 
   if (payload.type === 'progression') {
-    return { ...state, progression: await applyProgressionEvent(state.progression, event, verifyFn, { epochIterations: rewardParams?.epochIterations }) };
+    const workBound = isWorkBound(rewardParams);
+    const progression = await applyProgressionEvent(state.progression, event, verifyFn, {
+      epochIterations: rewardParams?.epochIterations,
+      chainHead: workBound ? (state.chain?.[payload.domain] ?? null) : undefined,
+    });
+    // the chain moves on only if the event was accepted
+    const accepted = progression.rejections.length === state.progression.rejections.length;
+    const chain = accepted && typeof payload.domain === 'string' ? { ...(state.chain ?? {}), [payload.domain]: event.id } : state.chain;
+    return { ...state, progression, chain };
   }
 
   if (payload.type === 'accrual') {
@@ -223,6 +260,8 @@ export async function applyAccrualEvent(rewardParams, state, event, verifyFn) {
 
     const rate = T === undefined || T === null ? 0 : T;
     if (!Number.isFinite(rate) || rate < 0 || rate > MAX_PATIENCE_RATE) return reject(`T must be between 0 and ${MAX_PATIENCE_RATE}`);
+    const brokenChain = chainViolation(rewardParams, state, payload);
+    if (brokenChain) return reject(brokenChain);
 
     const currentEpoch = domainAge(state.progression, domain);
     const price = commitmentPriceLamports(b, rate);
@@ -246,6 +285,7 @@ export async function applyAccrualEvent(rewardParams, state, event, verifyFn) {
       balances: pending > 0n ? { ...state.balances, [domain]: balance + pending } : state.balances,
       burns: { ...(state.burns ?? initialBurnsState()), consumed: { ...(state.burns?.consumed ?? {}), [domain]: consumed + price } },
       usedNonces: { ...state.usedNonces, [nonce]: true },
+      chain: { ...(state.chain ?? {}), [domain]: event.id },
     };
   }
 
@@ -286,6 +326,8 @@ export async function applyAccrualEvent(rewardParams, state, event, verifyFn) {
     if (state.usedNonces[nonce]) return reject('nonce already used');
     if (!(await verifyClaimAuthorization(payload))) return reject('invalid signature: only the domain itself can claim its own accrued balance');
 
+    const brokenChain = chainViolation(rewardParams, state, payload);
+    if (brokenChain) return reject(brokenChain);
     const claimableUnits = currentlyClaimableUnits(rewardParams, state, domain);
 
     let amount;
@@ -304,6 +346,7 @@ export async function applyAccrualEvent(rewardParams, state, event, verifyFn) {
       positions: { ...state.positions, [domain]: { ...state.positions[domain], lastActionEpoch: currentEpoch } },
       balances: { ...state.balances, [domain]: currentBalance + amount },
       usedNonces: { ...state.usedNonces, [nonce]: true },
+      chain: { ...(state.chain ?? {}), [domain]: event.id },
     };
   }
 
@@ -318,6 +361,8 @@ export async function applyAccrualEvent(rewardParams, state, event, verifyFn) {
     if (state.usedNonces[nonce]) return reject('nonce already used');
     if (!(await verifyDelegatedClaimAuthorization(payload))) return reject('invalid delegated signature');
 
+    const brokenChain = chainViolation(rewardParams, state, payload);
+    if (brokenChain) return reject(brokenChain);
     const claimableUnits = currentlyClaimableUnits(rewardParams, state, domain);
 
     let amount;
@@ -336,6 +381,7 @@ export async function applyAccrualEvent(rewardParams, state, event, verifyFn) {
       positions: { ...state.positions, [domain]: { ...state.positions[domain], lastActionEpoch: currentEpoch } },
       balances: { ...state.balances, [domain]: currentBalance + amount },
       usedNonces: { ...state.usedNonces, [nonce]: true },
+      chain: { ...(state.chain ?? {}), [domain]: event.id },
     };
   }
 

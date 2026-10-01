@@ -7,6 +7,10 @@
 //  2. THE RANKING FIGURE: what an app ranks by — the claimable at this moment and the laps (epochs since the last
 //     action), as YourMine's own score and laps are. A figure is read at a moment and frozen by whoever stores it.
 //
+// In a work-bound deployment (rewardParams.epochIterations) the mining events of a domain are one signed chain: each
+// names the one it follows, and the work of an epoch starts from it. `chainHead` is the last one, what the next must
+// follow — and what a reader that keeps a baseline asks the domain to continue from.
+//
 // assessMining() derives both from raw events: each event's envelope is verified (id, author, signature), the events
 // are folded by the same reducers a wallet uses (progression proofs, the burn gate, auto-claims), and what the
 // reader could not confirm counts for nothing. The burn records are the READER's: a validator asks Solana itself
@@ -18,7 +22,7 @@
 
 import { verifyEvent } from './event.js';
 import { initialWalletState, materializeWalletFromWireEvents } from './wallet.js';
-import { claimableNow, withConfirmedBurns } from './accrual.js';
+import { claimableNow, withConfirmedBurns, miningChainHead } from './accrual.js';
 import { domainAge } from './reward.js';
 import { fromUnits } from './units.js';
 
@@ -36,6 +40,7 @@ export function miningState(rewardParams, walletState, domain) {
     lastActionEpoch: position.lastActionEpoch,
     epoch,
     sinceLastAction,
+    chainHead: miningChainHead(walletState.accrual, domain),
     claimableUnits,
     claimable: fromUnits(claimableUnits),
   };
