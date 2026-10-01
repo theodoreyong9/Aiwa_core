@@ -549,6 +549,26 @@ For an app, a validator or a registry that holds a domain's events (`mining-stat
   `serializeWalletState`) makes it incremental: only the new events are folded. Cost: one signature per event plus a few
   ms per progression event — not the work the domain did.
 
+## Taking a wallet's mining as evidence — `assessSubmission` (turnkey)
+
+An app that must rank or pay by a domain's mining without trusting the wallet — a registry, a leaderboard — keeps its
+own storage and policy and takes the protocol part from `submission.js`:
+
+- `assessSubmission({ rewardParams, evidence, domain, baseline, witnessed, connection })` verifies the evidence
+  (`{ version, domain, afterEpoch, events, witnesses }`, which aiwa-lib's `submissionEvidence()` builds), asks Solana
+  itself for the burns the baseline did not count, continues the `baseline` (`{ domain, epoch, head, state }` — keep what
+  it returns, hand it back next time: only the new events are folded) and checks the witnesses. `ok: false` with a
+  reason when the evidence cannot be used; `ok` with `mining: null` for a valid history with no position.
+- **Witnesses.** The chain above is not "no second history": a domain can keep two, redoing the work, and show one.
+  A wallet that received a domain's events can show the highest progression event of it that it holds — signed by that
+  domain, so a proof with no trust in whoever shows it. `ingestWitnesses` says which of those a submission brings are
+  worth keeping, `mergeWitnessStore` keeps them (bounded, the furthest along; what has since been validated is dropped),
+  and `assessSubmission(... witnessed)` requires the history shown to contain them. A fork, a stretch of work cut short,
+  or a hidden action followed by more work is then refused.
+- Not covered: a witness exists only if someone received those events; a burn after the last epoch shown and followed by
+  none can still be left out (a submission is a snapshot — that needs a clock); a domain really forked (one key, two
+  devices) is refused for good once its other history is witnessed.
+
 ## Position: proofs and the weighted median, combined (experimental)
 
 `computeCausalTick`'s weighted median is a **vote** (weight = committed capital). A Mirror reception commitment,
@@ -615,7 +635,7 @@ yellow paper, §13.2–§13.3, for the design notes (including what always-on ha
 
 ## Status
 
-389 passing `node --test` cases (354 pure-JS, plus a real Rust build+run
+400 passing `node --test` cases (354 pure-JS, plus a real Rust build+run
 cross-check when `cargo` is available — see above). Self-contained —
 the only external dependencies are `@noble/curves`, `@noble/hashes`,
 `@scure/bip39`, and an optional `@solana/web3.js` peer dependency.

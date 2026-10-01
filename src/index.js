@@ -22,6 +22,7 @@ export { DECIMALS, toUnits, fromUnits, fromFloat, fixedToUnits, format } from '.
 
 export { vdfSeed, computeVdfChain, verifyVdfChain } from './vdf.js';
 export { miningState, rankingFigure, assessMining } from './mining-state.js';
+export { assessSubmission, ingestWitnesses, mergeWitnessStore, domainOfAddress, SUBMISSION_LIMITS } from './submission.js';
 export { verifySuccinctEpochs, computeSuccinctEpochs, seedToGroupElement } from './succinct-vdf.js';
 export { RSA_2048_MODULUS, evaluate as wesolowskiEvaluate, prove as wesolowskiProve, verify as wesolowskiVerify } from './wesolowski-vdf.js';
 
