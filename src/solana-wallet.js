@@ -146,6 +146,14 @@ export async function validateBip39Mnemonic(mnemonic) {
   return validateMnemonic(mnemonic.trim(), wordlist);
 }
 
+/** A fresh BIP39 recovery phrase (English wordlist): 12 words by default, 24 on request. Random from the platform's own source. */
+export async function generateBip39Mnemonic(wordCount = 12) {
+  if (wordCount !== 12 && wordCount !== 24) throw new Error('generateBip39Mnemonic: 12 or 24 words');
+  const { generateMnemonic } = await import('@scure/bip39');
+  const { wordlist } = await import('@scure/bip39/wordlists/english.js');
+  return generateMnemonic(wordlist, wordCount === 12 ? 128 : 256);
+}
+
 export async function deriveKeypairFromBip39Mnemonic(mnemonic, accountIndex = 0) {
   const { ed25519 } = await import('@noble/curves/ed25519.js');
   if (!(await validateBip39Mnemonic(mnemonic))) {

@@ -187,3 +187,18 @@ test('toIdentity can sign, and its signature verifies against the same identity'
   const signature = await identity.sign(message);
   assert.equal(await identity.verify(message, signature), true);
 });
+
+test('generateBip39Mnemonic: a fresh valid phrase (12 words by default, 24 on request) that derives the same key every time', async () => {
+  const { generateBip39Mnemonic, validateBip39Mnemonic, deriveKeypairFromBip39Mnemonic } = await import('../src/solana-wallet.js');
+  const a = await generateBip39Mnemonic();
+  const b = await generateBip39Mnemonic();
+  assert.equal(a.split(' ').length, 12);
+  assert.notEqual(a, b);
+  assert.equal(await validateBip39Mnemonic(a), true);
+  assert.equal((await generateBip39Mnemonic(24)).split(' ').length, 24);
+  await assert.rejects(generateBip39Mnemonic(13), /12 or 24/);
+  const k1 = await deriveKeypairFromBip39Mnemonic(a);
+  const k2 = await deriveKeypairFromBip39Mnemonic(a);
+  assert.equal(k1.publicKey.toBase58(), k2.publicKey.toBase58(), 'logging in with the phrase gives the same address');
+  assert.notEqual((await deriveKeypairFromBip39Mnemonic(b)).publicKey.toBase58(), k1.publicKey.toBase58());
+});

@@ -30,7 +30,7 @@ export { weightedMedian } from './weighted-median.js';
 
 export {
   generateLightweightKeypair, lightweightKeypairFromSecretKey, deriveKeypairFromPassphrase,
-  deriveKeypairFromBip39Mnemonic, validateBip39Mnemonic, generateKeypair, keypairFromSecretKey,
+  deriveKeypairFromBip39Mnemonic, validateBip39Mnemonic, generateBip39Mnemonic, generateKeypair, keypairFromSecretKey,
   encryptSecretKey, decryptSecretKey, buildBurnTransaction, buildTransferTransaction,
   signAndSerialize, broadcastBurnTransaction, broadcastTransferTransaction, loadSolanaWeb3,
   toIdentity,
