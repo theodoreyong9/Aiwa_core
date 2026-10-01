@@ -331,8 +331,21 @@ export async function applyWalletEvent(rewardParams, state, event, verifyFn, con
   const payload = event.payload;
   if (!payload || typeof payload.type !== 'string') return state;
 
-  if (payload.type === 'progression' || payload.type === 'accrual' || payload.type === 'burn-record') {
+  if (payload.type === 'progression' || payload.type === 'burn-record') {
     return { ...state, accrual: await applyAccrualEvent(rewardParams, state.accrual, event, verifyFn) };
+  }
+
+  // A burn's commitment replaces the position, and pays what the previous one had accrued first (see accrual.js):
+  // that payment is a real claim, owned by the domain, spendable like any other. Its id is derived from the event's
+  // own nonce, so every reader names it the same.
+  if (payload.type === 'accrual') {
+    const { domain, nonce } = payload;
+    const newAccrual = await applyAccrualEvent(rewardParams, state.accrual, event, verifyFn);
+    const before = state.accrual.balances[domain] ?? 0n;
+    const after = newAccrual.balances[domain] ?? 0n;
+    if (after === before) return { ...state, accrual: newAccrual };
+    const conservation = issueClaim(state.conservation, { id: `auto:${nonce}`, kind: 'AIWA', amount: after - before, owner: domain });
+    return { ...state, accrual: newAccrual, conservation };
   }
 
   // A checkpoint is never handled HERE: applyWalletEvent only ever sees

@@ -12,11 +12,17 @@
 // reference) never resets — it is the domain's own total progression,
 // regardless of how often it claims.
 //
-// 'accrual': { domain, b } — commits additional capital, adds to any
-// already-committed b, resets the patience clock.
-// 'claim': { domain, amount, T } — computes what is currently
-// claimable from the real position, debits up to that amount into a
-// real bigint balance, resets the patience clock.
+// "Last action" mining (the same shape as YourMine's own): the position is
+// what the domain's LAST action left it.
+// 'accrual': { domain, b, T } — a burn's commitment. It REPLACES the
+// position: b is the capital that now mines (b = burned x (1 - T)), T the
+// patience rate chosen at this burn for what follows. Before replacing, the
+// claimable accrued so far is PAID (an automatic claim, credited to the
+// domain's balance): a new burn never forfeits what the previous one earned.
+// It resets the patience clock.
+// 'claim': { domain, amount } — computes what is currently claimable from
+// the real position, debits up to that amount into a real bigint balance,
+// resets the patience clock. T stays the one chosen at the last burn.
 //
 // Both require a real Ed25519 signature proving the real signer
 // controls `domain` — exactly the same signerPubkey/signature-vs-owner
@@ -156,8 +162,10 @@ async function verifyDelegatedClaimAuthorization(event) {
 // record fetchBurnRecord returned: the reader's own check against Solana); `covered` (domain -> lamports) and
 // `used` (signature -> true) are derived by folding 'burn-record' events. A reducer never reaches Solana: what
 // it may count is exactly what the reader put in `records`.
+// `consumed` (domain -> lamports): what the domain's commitments have used of what it burned. A burn backs a
+// commitment once: it is spent by it, even though the next commitment replaces the position.
 export function initialBurnsState() {
-  return { records: {}, covered: {}, used: {} };
+  return { records: {}, covered: {}, used: {}, consumed: {} };
 }
 
 export function initialAccrualState() {
@@ -165,6 +173,19 @@ export function initialAccrualState() {
 }
 
 const LAMPORTS_PER_UNIT = 1_000_000_000;
+export const MAX_PATIENCE_RATE = 0.4;
+
+/**
+ * What a commitment of capital `b` at patience rate `T` costs, in lamports of confirmed burn: the capital that
+ * counts is what is left of the burn after T of it is destroyed without counting — b = burned x (1 - T), so
+ * burned = ceil(b / (1 - T)). T is therefore a real choice: a larger T makes the reward curve more generous, and
+ * costs that share of the burn. (There is no recipient of that share: it is destroyed.)
+ */
+export function commitmentPriceLamports(b, T = 0) {
+  const lamports = Math.round(b * LAMPORTS_PER_UNIT);
+  if (!T) return lamports;
+  return Math.ceil(lamports / (1 - T) - 1e-6);
+}
 
 // Straight from rewardFixed()'s own reproducible Q128 BigInt to real
 // on-chain base units — no JS Number in between. This is the actual
@@ -200,21 +221,30 @@ export async function applyAccrualEvent(rewardParams, state, event, verifyFn) {
     if (state.usedNonces[nonce]) return reject('nonce already used');
     if (!(await verifyAccrualAuthorization(payload))) return reject('invalid signature: only the domain itself can commit capital to its own position');
 
+    const rate = T === undefined || T === null ? 0 : T;
+    if (!Number.isFinite(rate) || rate < 0 || rate > MAX_PATIENCE_RATE) return reject(`T must be between 0 and ${MAX_PATIENCE_RATE}`);
+
     const currentEpoch = domainAge(state.progression, domain);
-    const prior = state.positions[domain] ?? { b: 0, lastActionEpoch: currentEpoch, T: 0 };
-    // The genesis commitment (yellow paper §8): capital is what a burn covers. A domain's total committed `b`
-    // may not exceed what burns THIS READER has confirmed for it (see 'burn-record' below). The deployment may
-    // opt out explicitly — `rewardParams.commitmentBacking: 'none'` — for tests, demos, private economies;
-    // leaving it out means mandatory.
+    const price = commitmentPriceLamports(b, rate);
+    const consumed = state.burns?.consumed?.[domain] ?? 0;
+    // The genesis commitment (yellow paper §8): capital is what a burn covers. What this domain's commitments have
+    // used, plus this one's price, may not exceed what burns THIS READER has confirmed for it (see 'burn-record'
+    // below). The deployment may opt out explicitly — `rewardParams.commitmentBacking: 'none'` — for tests, demos,
+    // private economies; leaving it out means mandatory.
     if (rewardParams?.commitmentBacking !== 'none') {
       const covered = state.burns?.covered?.[domain] ?? 0;
-      if (Math.round((prior.b + b) * LAMPORTS_PER_UNIT) > covered) {
-        return reject(`commitment of ${prior.b + b} is not covered by a confirmed burn (${covered} lamports confirmed for this domain)`);
+      if (consumed + price > covered) {
+        return reject(`commitment of ${b} at T=${rate} is not covered by a confirmed burn: it costs ${price} lamports, ${covered - consumed} are left (${covered} confirmed for this domain, ${consumed} already used)`);
       }
     }
+    // The claimable accrued so far is paid before the position is replaced.
+    const pending = currentlyClaimableUnits(rewardParams, state, domain);
+    const balance = state.balances[domain] ?? 0n;
     return {
       ...state,
-      positions: { ...state.positions, [domain]: { b: prior.b + b, lastActionEpoch: currentEpoch, T: T ?? prior.T } },
+      positions: { ...state.positions, [domain]: { b, lastActionEpoch: currentEpoch, T: rate } },
+      balances: pending > 0n ? { ...state.balances, [domain]: balance + pending } : state.balances,
+      burns: { ...(state.burns ?? initialBurnsState()), consumed: { ...(state.burns?.consumed ?? {}), [domain]: consumed + price } },
       usedNonces: { ...state.usedNonces, [nonce]: true },
     };
   }

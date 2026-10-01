@@ -65,11 +65,11 @@ test('an accrual event commits capital but does not itself create spendable bala
   assert.equal(state.positions[domain].b, 10);
 });
 
-test('a second accrual event adds to the already-committed capital', async () => {
+test('a second accrual event REPLACES the position (last-action mining): what mines is the last burn', async () => {
   let state = await advanceEpochs(initialAccrualState(), domain, 5);
   state = await accrue(state, 10, { id: 'a1' });
   state = await accrue(state, 5, { id: 'a2', parents: ['a1'] });
-  assert.equal(state.positions[domain].b, 15);
+  assert.equal(state.positions[domain].b, 5);
 });
 
 test('THE REAL FIX, VERIFIED ON A SECOND BURN: a later accrual event on an already-matured position resets the patience clock too, not just the first one', async () => {
