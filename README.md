@@ -69,7 +69,9 @@ of it, for exactly this reason.
 - **Solana-specific identity** (`solana-wallet.js`, `identity-cost.js`,
   `hardware-attestation.js`) — Ed25519 keypair derivation (fresh, from a
   secret key, from a passphrase, from a standard BIP39 mnemonic at
-  Solana's own derivation path), Solana burn-transaction construction for
+  Solana's own derivation path; `generateBip39Mnemonic` makes a fresh 12- or
+  24-word phrase, `base58Encode`/`base58Decode` write a secret key the way
+  Solana wallets export it), Solana burn-transaction construction for
   identity activation cost, and optional two-hop hardware-root
   attestation. `toIdentity(keypair)` bridges a derived keypair into this
   package's own `identity.js` `Identity` — same seed, so a domain built
