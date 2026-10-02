@@ -635,6 +635,13 @@ reported, not accused); only as fresh as the freshest honest observer; nothing a
 actors — `proof.observers` is informational. Synthetic worlds chosen by their author, not a security proof. See the
 yellow paper, §13.2–§13.3, for the design notes (including what always-on hardware is for).
 
+## Formats are frozen (v1)
+
+The signed shapes — the payload of progression, accrual and claim events (`previous` included), the starting point of the work of an
+epoch (`progressionSeed`), the checkpoint and the backup built on it — are **version 1, frozen since 2026-10-02**. Changing any of them
+resets the wallets that already exist (it did three times on 2026-10-01); from now on that is a version 2, with a way for v1 wallets to
+carry over decided before it is written. See `Aiwa_project/RELEASING.md` for the release order.
+
 ## Status
 
 402 passing `node --test` cases (354 pure-JS, plus a real Rust build+run
