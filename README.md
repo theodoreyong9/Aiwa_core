@@ -1,5 +1,7 @@
 # aiwa-core
 
+> **New here?** What Aiwa is and how it works end to end, in plain words: [EXPLAINED.md](https://github.com/theodoreyong9/Aiwa_project/blob/main/EXPLAINED.md) (français : [EXPLICATION.md](https://github.com/theodoreyong9/Aiwa_project/blob/main/EXPLICATION.md)).
+
 Commitment, state, epoch, transition, VDF, proof, verification,
 progression. Pure — no transport, no GUN, no GitHub, no YourMine, no
 Jobber. Self-contained: no dependency on any repo outside this stack.
