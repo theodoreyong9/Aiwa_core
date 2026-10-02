@@ -635,6 +635,22 @@ reported, not accused); only as fresh as the freshest honest observer; nothing a
 actors — `proof.observers` is informational. Synthetic worlds chosen by their author, not a security proof. See the
 yellow paper, §13.2–§13.3, for the design notes (including what always-on hardware is for).
 
+## The order a reader folds events in — `canonicalOrder`
+
+A log is a graph: two events that do not know of each other (two branches) have no order of their own. Usually that does not matter;
+it does when they contradict each other (one claim spent twice, one voucher redeemed twice, one claim id taken by two domains): whichever
+is folded first wins, the other is refused. Folded in the order they happened to *arrive*, two readers holding the same events could
+pick different winners and keep them. `canonicalOrder(events, { placed })` gives one order for the same set whatever order it comes
+in: a topological order (a parent before its children) in which, among the events that can come next, the one with the **smallest id**
+goes first. aiwa-lib folds in this order.
+
+**What it is not.** Agreement, not fairness: the winner is the smaller id, which is arbitrary, and a signer who writes two contradicting
+events can try variants until the one he wants has the smaller id. It does not make the winner the first in time (there is no clock)
+nor protect whoever accepted the other one — for that, wait before accepting (let the histories meet) or anchor the head on Solana (not
+built). What stays: two valid signatures on contradicting events are a proof, checkable by anyone, that the signer wrote both. A parent
+a reader does not have (pruned history) counts as satisfied; a conflict that a checkpoint already absorbed stays as the checkpoint
+decided it (the same trade-off every checkpoint makes). Not a change of any signed format.
+
 ## Formats are frozen (v1)
 
 The signed shapes — the payload of progression, accrual and claim events (`previous` included), the starting point of the work of an
@@ -644,7 +660,7 @@ carry over decided before it is written. See `Aiwa_project/RELEASING.md` for the
 
 ## Status
 
-402 passing `node --test` cases (354 pure-JS, plus a real Rust build+run
+410 passing `node --test` cases (362 pure-JS, plus a real Rust build+run
 cross-check when `cargo` is available — see above). Self-contained —
 the only external dependencies are `@noble/curves`, `@noble/hashes`,
 `@scure/bip39`, and an optional `@solana/web3.js` peer dependency.
