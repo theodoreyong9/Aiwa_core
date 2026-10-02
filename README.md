@@ -647,7 +647,8 @@ goes first. aiwa-lib folds in this order.
 **What it is not.** Agreement, not fairness: the winner is the smaller id, which is arbitrary, and a signer who writes two contradicting
 events can try variants until the one he wants has the smaller id. It does not make the winner the first in time (there is no clock)
 nor protect whoever accepted the other one — for that, wait before accepting (let the histories meet) or anchor the head on Solana (not
-built). What stays: two valid signatures on contradicting events are a proof, checkable by anyone, that the signer wrote both. A parent
+built; an anchor needs a connection, so it does nothing for an exchange that stays entirely offline: there, only the amount at risk, trust
+and the proof afterwards remain). What stays: two valid signatures on contradicting events are a proof, checkable by anyone, that the signer wrote both. A parent
 a reader does not have (pruned history) counts as satisfied; a conflict that a checkpoint already absorbed stays as the checkpoint
 decided it (the same trade-off every checkpoint makes). Not a change of any signed format.
 
