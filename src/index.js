@@ -40,7 +40,7 @@ export {
   SOLANA_INCINERATOR_ADDRESS, initialIdentityCostState, linearCostCurve,
   requiredBurnLamports, verifyBurnProof, registerIdentityCost, hasIdentityCost, identityCostFromCommitments, identityCostFromBurns,
 } from './identity-cost.js';
-export { base58Decode, normalizeBurnTransaction, fetchBurnRecord, verifyBurnRecordFor } from './burn-record.js';
+export { base58Decode, base58Encode, normalizeBurnTransaction, fetchBurnRecord, verifyBurnRecordFor } from './burn-record.js';
 export {
   issueHardwareRoot, bindHardwareRoot, verifyHardwareAttestation, isIndependenceAttested, MIN_INDEPENDENT_ROOTS,
 } from './hardware-attestation.js';

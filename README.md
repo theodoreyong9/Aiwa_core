@@ -635,7 +635,7 @@ yellow paper, §13.2–§13.3, for the design notes (including what always-on ha
 
 ## Status
 
-400 passing `node --test` cases (354 pure-JS, plus a real Rust build+run
+402 passing `node --test` cases (354 pure-JS, plus a real Rust build+run
 cross-check when `cargo` is available — see above). Self-contained —
 the only external dependencies are `@noble/curves`, `@noble/hashes`,
 `@scure/bip39`, and an optional `@solana/web3.js` peer dependency.

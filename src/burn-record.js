@@ -16,6 +16,16 @@ import { SOLANA_INCINERATOR_ADDRESS, verifyBurnProof } from './identity-cost.js'
 
 const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 
+/** Bitcoin-alphabet base58 of `bytes`: the form Solana addresses and exported secret keys are written in. */
+export function base58Encode(bytes) {
+  let n = 0n;
+  for (const byte of bytes) n = n * 256n + BigInt(byte);
+  let out = '';
+  while (n > 0n) { out = ALPHABET[Number(n % 58n)] + out; n /= 58n; }
+  for (const byte of bytes) { if (byte === 0) out = '1' + out; else break; }
+  return out;
+}
+
 /** Bitcoin-alphabet base58, the form Solana addresses are written in. */
 export function base58Decode(text) {
   let n = 0n;
